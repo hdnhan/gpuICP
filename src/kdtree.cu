@@ -1,5 +1,4 @@
 #include "kdtree.hpp"
-#include <thrust/fill.h>                  // fill
 #include <thrust/iterator/zip_iterator.h> // make_zip_iterator
 #include <thrust/sort.h>                  // stable_sort
 #include <thrust/tuple.h>                 // make_tuple
@@ -103,32 +102,89 @@ __device__ uint32_t findNearestPoint(float3 const &point, float3 const *d_target
     uint32_t stack[32]; // store tree id of the secondary node (left or right)
     uint32_t idx = 0, currID = 0, bestID = 0;
     float bestDistance = estimateDistance(point, d_target[0]);
-    while (currID < n_target || idx > 0) {
-        // try to move down to the tree (children) given the current id
-        while (currID < n_target) {
-            float currDistance = estimateDistance(point, d_target[currID]);
-            if (currDistance < bestDistance)
-                bestDistance = currDistance, bestID = currID;
 
-            uint32_t level = log2f(currID + 1);
+    uint32_t n_level = ceil(log2f(n_target + 1));
+    uint32_t maxPoints = (1 << n_level) - 1;
+    uint32_t missingPointsStart = 0, missingPointsEnd = maxPoints - n_target;
+    uint2 missingRange[32];
+    uint32_t level = 0;
+    float diff, currDistance;
+
+    // Check if currID is a valid point
+    while (true) {
+        // try to move down to the tree (children) given the current id
+        while (currID < maxPoints && !(level == n_level - 1 && missingPointsEnd != missingPointsStart)) {
+            if (level == n_level - 1)
+                currDistance = estimateDistance(point, d_target[currID - missingPointsStart]);
+            else
+                currDistance = estimateDistance(point, d_target[currID]);
+
+            if (currDistance < bestDistance) {
+                bestDistance = currDistance;
+                if (level == n_level - 1)
+                    bestID = currID - missingPointsStart;
+                else
+                    bestID = currID;
+            }
+
+            level = log2f(currID + 1);
             uint32_t axis = level % 3;
-            float diff = getDifference(point, d_target[currID], axis);
+            if (level == n_level - 1)
+                diff = getDifference(point, d_target[currID - missingPointsStart], axis);
+            else
+                diff = getDifference(point, d_target[currID], axis);
+
+            uint32_t firstID, secondID;
+            uint32_t firstMissingPointsStart, firstMissingPointsEnd;
+            uint32_t secondMissingPointsStart, secondMissingPointsEnd;
             // [left...root...right]
-            uint32_t first = diff < 0 ? 2 * currID + 1 : 2 * currID + 2;
-            uint32_t second = diff < 0 ? 2 * currID + 2 : 2 * currID + 1;
-            if (second < n_target && diff * diff < bestDistance)
-                stack[idx++] = second;
-            currID = first;
+            if (diff < 0) {
+                firstID = 2 * currID + 1;
+                secondID = 2 * currID + 2;
+                firstMissingPointsStart = missingPointsStart;
+                firstMissingPointsEnd = (missingPointsStart + missingPointsEnd) / 2;
+                secondMissingPointsStart = firstMissingPointsEnd;
+                secondMissingPointsEnd = missingPointsEnd;
+            } else {
+                firstID = 2 * currID + 2;
+                secondID = 2 * currID + 1;
+                firstMissingPointsStart = (missingPointsStart + missingPointsEnd) / 2;
+                firstMissingPointsEnd = missingPointsEnd;
+                secondMissingPointsStart = missingPointsStart;
+                secondMissingPointsEnd = firstMissingPointsStart;
+            }
+
+            if (secondID < maxPoints && diff * diff < bestDistance) {
+                stack[idx] = secondID;
+                missingRange[idx].x = secondMissingPointsStart;
+                missingRange[idx].y = secondMissingPointsEnd;
+                idx++;
+            }
+            currID = firstID;
+            missingPointsStart = firstMissingPointsStart;
+            missingPointsEnd = firstMissingPointsEnd;
+            level++;
         }
         // move up to the tree (parent or sibling)
+        bool canMove = false;
         while (idx > 0) {
             currID = stack[--idx];
             uint32_t parentID = (currID - 1) / 2;
-            uint32_t level = log2f(parentID + 1);
+            level = log2f(parentID + 1);
             uint32_t axis = level % 3;
-            float diff = getDifference(point, d_target[parentID], axis);
-            if (diff * diff < bestDistance)
+            // NOTE: Parent ID is always valid
+            diff = getDifference(point, d_target[parentID], axis);
+            if (diff * diff < bestDistance) {
+                canMove = true;
+                level++;
+                missingPointsStart = missingRange[idx].x;
+                missingPointsEnd = missingRange[idx].y;
                 break;
+            }
+        }
+        if (!canMove) {
+            // No more points to check
+            break;
         }
     }
     return bestID;
@@ -175,14 +231,10 @@ struct Comparator {
 KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
     n_target = target.size();
     uint32_t n_level = ceil(log2(n_target + 1));
-    // TODO: Making the tree full (not optimized) for now.
-    // Fill those empty points with initValue (assume large enough)
-    n_target = (1 << n_level) - 1;
 
     // Assuming all points are root of the tree
     thrust::device_vector<uint32_t> treeIDs(n_target, 0);
-    float3 initValue = {1e9f, 1e9f, 1e9f};
-    d_target = thrust::device_vector<float3>(n_target, initValue);
+    d_target = thrust::device_vector<float3>(n_target);
     cudaMemcpy(thrust::raw_pointer_cast(d_target.data()), target.data(), target.size() * sizeof(float3),
                cudaMemcpyHostToDevice);
 
@@ -193,9 +245,9 @@ KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
     uint32_t blockSize = 1 << 8;
     uint32_t numBlocks = (n_target + blockSize - 1) / blockSize;
     // [start, end) of each level, to optimize:
-    // - only reserve space for last level
+    // - only reserve space for second last level
     // - subtract all ids of the current level to the smallest one [2^x - 1, 2^(x + 1) - 1) => [0, 2^x)
-    thrust::device_vector<uint2> IDRange(1 << (n_level - 1));
+    thrust::device_vector<uint2> IDRange(1 << (n_level - 2));
 
     auto *treeIDsPtr = thrust::raw_pointer_cast(treeIDs.data());
     auto *IDRangePtr = thrust::raw_pointer_cast(IDRange.data());
