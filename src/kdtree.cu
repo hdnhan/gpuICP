@@ -203,6 +203,7 @@ __global__ void findAllNearestDistanceKernel(float3 *d_source, uint32_t n_source
         return;
     float3 point = d_source[idx];
     int32_t id = findNearestPoint(point, d_target, n_target, inlierThreshold);
+    // There is no point in the tree that is in the inlier threshold
     if (id == -1)
         d_distance[idx] = -1;
     else
