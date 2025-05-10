@@ -111,8 +111,7 @@ __device__ uint32_t findNearestPoint(float3 const &point, float3 const *d_target
     float diff, currDistance;
 
     // Check if currID is a valid point
-    while (currID < maxPoints && !(level == n_level - 1 && missingPointsEnd != missingPointsStart) ||
-           idx > 0) {
+    while (true) {
         // try to move down to the tree (children) given the current id
         while (currID < maxPoints && !(level == n_level - 1 && missingPointsEnd != missingPointsStart)) {
             if (level == n_level - 1)
