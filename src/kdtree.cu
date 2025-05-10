@@ -25,7 +25,7 @@ IDRange[5] = [9, 12)
 IDRange[6] = [12, 15)
 */
 
-inline __device__ uint32_t lower_bound(uint32_t const *data, uint32_t size, uint32_t value) {
+inline __device__ uint32_t lowerBound(uint32_t const *data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
         uint32_t mid = (left + right) / 2;
@@ -37,7 +37,7 @@ inline __device__ uint32_t lower_bound(uint32_t const *data, uint32_t size, uint
     return left;
 }
 
-inline __device__ uint32_t upper_bound(uint32_t const *data, uint32_t size, uint32_t value) {
+inline __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
         uint32_t mid = (left + right) / 2;
@@ -57,8 +57,8 @@ __global__ void searchIDRange(uint32_t *treeIDs, uint32_t size, uint2 *IDRange, 
         return;
     uint32_t id = idx;
 
-    uint32_t start = lower_bound(treeIDs, size, id);
-    uint32_t end = upper_bound(treeIDs, size, id);
+    uint32_t start = lowerBound(treeIDs, size, id);
+    uint32_t end = upperBound(treeIDs, size, id);
     IDRange[id - (1 << level) + 1].x = start;
     IDRange[id - (1 << level) + 1].y = end;
 }
@@ -97,11 +97,17 @@ inline __device__ float getDifference(float3 const &point, float3 const &target,
         return point.z - target.z;
 }
 
-__device__ uint32_t findNearestPoint(float3 const &point, float3 const *d_target, uint32_t n_target) {
+__device__ int32_t findNearestPoint(float3 const &point, float3 const *d_target, uint32_t n_target,
+                                    float inlierThreshold) {
     // TODO: Assume maximum level is 32, need to check if it is enough
     uint32_t stack[32]; // store tree id of the secondary node (left or right)
-    uint32_t idx = 0, currID = 0, bestID = 0;
-    float bestDistance = estimateDistance(point, d_target[0]);
+    uint32_t idx = 0, currID = 0;
+    int32_t bestID = -1;
+    float bestDistance = inlierThreshold * inlierThreshold;
+    if (inlierThreshold <= 0) {
+        bestID = 0;
+        bestDistance = estimateDistance(point, d_target[0]);
+    }
 
     uint32_t n_level = ceil(log2f(n_target + 1));
     uint32_t maxPoints = (1 << n_level) - 1;
@@ -191,14 +197,16 @@ __device__ uint32_t findNearestPoint(float3 const &point, float3 const *d_target
 }
 
 __global__ void findAllNearestDistanceKernel(float3 *d_source, uint32_t n_source, float3 *d_target,
-                                             uint32_t n_target, float *d_distance) {
+                                             uint32_t n_target, float *d_distance, float inlierThreshold) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n_source)
         return;
     float3 point = d_source[idx];
-    uint32_t id = findNearestPoint(point, d_target, n_target);
-    float dist = estimateDistance(point, d_target[id]);
-    d_distance[idx] = sqrt(dist);
+    int32_t id = findNearestPoint(point, d_target, n_target, inlierThreshold);
+    if (id == -1)
+        d_distance[idx] = -1;
+    else
+        d_distance[idx] = sqrt(estimateDistance(point, d_target[id]));
 }
 
 inline __host__ __device__ float getAxisValue(float3 const &point, uint32_t axis) {
@@ -263,7 +271,8 @@ KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
     cudaStreamSynchronize(stream);
 }
 
-std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> source, cudaStream_t stream) {
+std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> source, float inlierThreshold,
+                                                  cudaStream_t stream) {
     uint32_t n_source = source.size();
     thrust::device_vector<float3> d_sources(source.data(), source.data() + n_source);
     thrust::device_vector<float> d_distance(n_source, -1);
@@ -271,7 +280,7 @@ std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> source, cu
     uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
     findAllNearestDistanceKernel<<<numBlocks, blockSize, 0, stream>>>(
         thrust::raw_pointer_cast(d_sources.data()), n_source, thrust::raw_pointer_cast(d_target.data()),
-        n_target, thrust::raw_pointer_cast(d_distance.data()));
+        n_target, thrust::raw_pointer_cast(d_distance.data()), inlierThreshold);
     cudaStreamSynchronize(stream);
     std::vector<float> estimateDistance(n_source);
     cudaMemcpy(estimateDistance.data(), thrust::raw_pointer_cast(d_distance.data()), n_source * sizeof(float),

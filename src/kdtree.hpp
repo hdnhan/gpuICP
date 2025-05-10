@@ -10,7 +10,9 @@ class KDTree {
     KDTree(std::vector<float3> target, cudaStream_t stream);
     ~KDTree() {}
 
-    std::vector<float> findAllNearestDistance(std::vector<float3> source, cudaStream_t stream);
+    // if inlierThreshold is non-positive, it will be ignored
+    std::vector<float> findAllNearestDistance(std::vector<float3> source, float inlierThreshold,
+                                              cudaStream_t stream);
 
   private:
     uint32_t n_target;

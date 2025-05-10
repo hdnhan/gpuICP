@@ -65,7 +65,7 @@ void run(int N, int Q) {
     float mn = -2, mx = 2;
     auto [source, source2] = generateRandomPointCloud(N, mn, mx);
     auto [target, target2] = generateRandomPointCloud(Q, mn, mx);
-    float inlierThreshold = 100.0;
+    float inlierThreshold = 0.5;
     Timer timer;
 
     timer.start();
@@ -81,7 +81,7 @@ void run(int N, int Q) {
     auto kd = KDTree(source2, stream);
     timer.end("Build");
     timer.start();
-    auto distances2 = kd.findAllNearestDistance(target2, stream);
+    auto distances2 = kd.findAllNearestDistance(target2, inlierThreshold, stream);
     timer.end("Queries");
     timer.end("Total Latency");
     cudaStreamDestroy(stream);
@@ -91,7 +91,8 @@ void run(int N, int Q) {
         return;
     }
 
-    int queryIndex = 0, queryMaxDiff = 0;
+    int queryIndex = 0;
+    float queryMaxDiff = 0;
     for (size_t i = 0; i < distances.size(); ++i) {
         auto diff = std::abs(distances[i] - distances2[i]);
         if (diff > queryMaxDiff) {
@@ -99,7 +100,10 @@ void run(int N, int Q) {
             queryIndex = i;
         }
     }
-    spdlog::info("Max diff: {} at index {}", queryMaxDiff, queryIndex);
+    if (queryMaxDiff < 1e-6)
+        spdlog::info("Max diff: {} at index {}", queryMaxDiff, queryIndex);
+    else
+        spdlog::error("Max diff: {} at index {}", queryMaxDiff, queryIndex);
 }
 
 int main(int argc, char *argv[]) {
