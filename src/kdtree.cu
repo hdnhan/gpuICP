@@ -244,11 +244,11 @@ KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
     auto end = thrust::make_zip_iterator(thrust::make_tuple(treeIDs.end(), d_target.end()));
 
     uint32_t blockSize = 1 << 8;
-    uint32_t numBlocks = (2 * n_target + blockSize - 1) / blockSize;
+    uint32_t numBlocks = (n_target + blockSize - 1) / blockSize;
     // [start, end) of each level, to optimize:
-    // - only reserve space for last level
+    // - only reserve space for second last level
     // - subtract all ids of the current level to the smallest one [2^x - 1, 2^(x + 1) - 1) => [0, 2^x)
-    thrust::device_vector<uint2> IDRange(1 << (n_level - 1));
+    thrust::device_vector<uint2> IDRange(1 << (n_level - 2));
 
     auto *treeIDsPtr = thrust::raw_pointer_cast(treeIDs.data());
     auto *IDRangePtr = thrust::raw_pointer_cast(IDRange.data());
