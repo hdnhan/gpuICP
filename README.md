@@ -1,6 +1,17 @@
+### Build docker image
 ```bash
-sudo apt install libpcl-dev
+# For CUDA 11.4
+docker build -t test -f Dockerfile.cuda114 .
 
+# For CUDA 12.1
+docker build -t test -f Dockerfile.cuda121 .
+```
+
+### Run tests
+```bash
+docker run -it --rm --gpus all -v $(pwd):/workspace -w /workspace test bash
+
+# Inside the container, run
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build --config Release --parallel
 
