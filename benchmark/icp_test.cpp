@@ -1,3 +1,4 @@
+#include "icp.hpp"
 #include "kdtree.hpp"
 #include <chrono>
 #include <cxxopts.hpp>
@@ -29,8 +30,8 @@ class Timer {
     std::stack<std::chrono::high_resolution_clock::time_point> startTimes;
 };
 
-void pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl::PointXYZ>::Ptr target,
-               float inlierThreshold) {
+float pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl::PointXYZ>::Ptr target,
+                float inlierThreshold) {
     pcl::KdTree<pcl::PointXYZ>::Ptr kdtree(new pcl::KdTreeFLANN<pcl::PointXYZ>);
     kdtree->setInputCloud(source);
 
@@ -44,23 +45,19 @@ void pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl::
     }
     float sumDistances = 0, count = 0;
     for (int i = 0; i < minDistances.size(); ++i) {
-        if (minDistances[i] > 0) {
-            sumDistances += minDistances[i];
+        if (minDistances[i] > 0)
             count++;
-        }
     }
-    if (count > 0) {
-        float meanDistance = sumDistances / count;
-        spdlog::info("Mean distance: {}, Count: {}", meanDistance, count);
-    } else {
-        spdlog::info("No inliers found.");
-    }
+    float percent = 0;
+    if (count > 0)
+        percent = (float)count / source->size();
+    return percent;
 }
 
-std::vector<float> pclICP(pcl::PointCloud<pcl::PointXYZ>::Ptr source,
-                          pcl::PointCloud<pcl::PointXYZ>::Ptr target, float maxCorrespondenceDistance,
-                          int maximumIterations, float transformationEpsilon, float euclideanFitnessEpsilon) {
-    std::vector<float> Rt(16);
+std::tuple<bool, float> pclICP(pcl::PointCloud<pcl::PointXYZ>::Ptr source,
+                               pcl::PointCloud<pcl::PointXYZ>::Ptr target, Eigen::Matrix4f &Rt,
+                               float maxCorrespondenceDistance, int maximumIterations,
+                               float transformationEpsilon, float euclideanFitnessEpsilon) {
     pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
     pcl::PointCloud<pcl::PointXYZ>::Ptr transformed(new pcl::PointCloud<pcl::PointXYZ>);
     icp.setInputSource(source);
@@ -70,23 +67,20 @@ std::vector<float> pclICP(pcl::PointCloud<pcl::PointXYZ>::Ptr source,
     icp.setTransformationEpsilon(transformationEpsilon);
     icp.setEuclideanFitnessEpsilon(euclideanFitnessEpsilon);
 
-    icp.align(*transformed);
-
-    Eigen::Matrix4f trans = icp.getFinalTransformation();
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j)
-            Rt[i * 4 + j] = trans(i, j);
-
-    pclKDTree(transformed, target, maxCorrespondenceDistance);
-    return Rt;
+    icp.align(*transformed, Rt);
+    Rt = icp.getFinalTransformation();
+    bool converged = icp.hasConverged();
+    auto percent = pclKDTree(transformed, target, maxCorrespondenceDistance);
+    return {converged, percent};
 }
 
 int main(int argc, char *argv[]) {
     cxxopts::Options options("./build/benchmark/icp_test", "ICP Benchmark");
     options.add_options()("h,help", "Show help")(
-        "s", "Source point cloud path", cxxopts::value<std::string>()->default_value("/tmp/source.ply"))(
-        "t", "Target point cloud path", cxxopts::value<std::string>()->default_value("/tmp/target.ply"))(
-        "iter", "Number of iterations", cxxopts::value<int>()->default_value("1"));
+        "s", "Source point cloud path", cxxopts::value<std::string>()->default_value("assets/source.ply"))(
+        "t", "Target point cloud path", cxxopts::value<std::string>()->default_value("assets/target.ply"))(
+        "repeat", "Repeat times", cxxopts::value<int>()->default_value("1"))(
+        "maxiter", "Max iterations", cxxopts::value<int>()->default_value("1000"));
 
     auto config = options.parse(argc, argv);
     if (config.count("help")) {
@@ -101,8 +95,8 @@ int main(int argc, char *argv[]) {
 
     std::string sourcePath = config["s"].as<std::string>();
     std::string targetPath = config["t"].as<std::string>();
-    int iter = config["iter"].as<int>();
-    spdlog::info("Source: {}, Target: {}, iter: {}", sourcePath, targetPath, iter);
+    int repeat = config["repeat"].as<int>();
+    spdlog::info("Source: {}, Target: {}, repeat: {}", sourcePath, targetPath, repeat);
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr source(new pcl::PointCloud<pcl::PointXYZ>);
     if (pcl::io::loadPLYFile(sourcePath, *source) == -1) {
@@ -116,31 +110,70 @@ int main(int argc, char *argv[]) {
         return -1;
     }
     spdlog::info("Source size: {}, Target size: {}", source->size(), target->size());
-
-    float maxCorrespondenceDistance = 0.05f;
-    int maximumIterations = 1000;
-    float transformationEpsilon = 1e-8f;
-    float euclideanFitnessEpsilon = 1e-8f;
-    // print first 10 points of source and target
-    spdlog::info("Source points:");
-    for (int i = 0; i < std::min(10, (int)source->size()); ++i)
-        spdlog::info("({:.3f}, {:.3f}, {:.3f})", source->points[i].x, source->points[i].y,
-                     source->points[i].z);
-    spdlog::info("Target points:");
-    for (int i = 0; i < std::min(10, (int)target->size()); ++i)
-        spdlog::info("({:.3f}, {:.3f}, {:.3f})", target->points[i].x, target->points[i].y,
-                     target->points[i].z);
-
-    timer.start();
-    std::vector<float> Rt = pclICP(source, target, maxCorrespondenceDistance, maximumIterations,
-                                   transformationEpsilon, euclideanFitnessEpsilon);
-    timer.end("PCL ICP");
-    spdlog::info("PCL ICP result:");
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j)
-            printf("%f ", Rt[i * 4 + j]);
-        printf("\n");
+    std::vector<float3> sourceVec(source->size());
+    std::vector<float3> targetVec(target->size());
+    for (int i = 0; i < source->size(); ++i) {
+        sourceVec[i].x = source->at(i).x;
+        sourceVec[i].y = source->at(i).y;
+        sourceVec[i].z = source->at(i).z;
+    }
+    for (int i = 0; i < target->size(); ++i) {
+        targetVec[i].x = target->at(i).x;
+        targetVec[i].y = target->at(i).y;
+        targetVec[i].z = target->at(i).z;
     }
 
+    float maxCorrespondenceDistance = 0.05f;
+    int maximumIterations = config["maxiter"].as<int>();
+    float transformationEpsilon = 1e-8f;
+    float euclideanFitnessEpsilon = 1e-8f;
+
+    for (int it = 0; it < repeat; ++it) {
+        spdlog::info("Iteration: {}", it);
+
+        // Start with PCL ICP
+        Eigen::Matrix4f init = Eigen::Matrix4f::Identity();
+        timer.start();
+        auto [converged, percent] = pclICP(source, target, init, maxCorrespondenceDistance, maximumIterations,
+                                           transformationEpsilon, euclideanFitnessEpsilon);
+        timer.end("PCL ICP");
+        if (converged)
+            spdlog::info("PCL ICP converged, percent: {}", percent * 100);
+        else
+            spdlog::error("PCL ICP not converged.");
+        spdlog::info("PCL ICP result:");
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j)
+                printf("%f ", init(i, j));
+            printf("\n");
+        }
+        printf("\n");
+
+        cudaStream_t stream;
+        cudaStreamCreate(&stream);
+
+        std::vector<float> cuRt(16, 0); // Acts as initial guess
+        for (int i = 0; i < 4; ++i)
+            cuRt[i * 4 + i] = 1.0f;
+
+        timer.start();
+        ICP icp;
+        icp.setTarget(targetVec, stream);
+        auto [converged2, percent2] = icp.align(sourceVec, maxCorrespondenceDistance, maximumIterations,
+                                                transformationEpsilon, euclideanFitnessEpsilon, cuRt, stream);
+        timer.end("CUDA ICP");
+        if (converged2)
+            spdlog::info("CUDA ICP converged, percent: {}", percent2 * 100);
+        else
+            spdlog::error("CUDA ICP not converged.");
+        spdlog::info("CUDA ICP result:");
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j)
+                printf("%f ", cuRt[i * 4 + j]);
+            printf("\n");
+        }
+        cudaStreamDestroy(stream);
+    }
+    spdlog::info("Done.");
     return 0;
 }

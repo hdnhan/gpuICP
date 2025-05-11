@@ -31,6 +31,23 @@ __global__ void applyTransformation(float3 *source, uint32_t n_source, float *R,
     source[idx] = r;
 }
 
+// in-place operation, this is for estimating error
+__global__ void applyTransformation2(float *dsx, float *dsy, float *dsz, float *dtx, float *dty, float *dtz,
+                                     uint32_t start, uint32_t end, float *R, float *t) {
+    int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < start || idx >= end)
+        return;
+    // Transform the source points (dsx, dsy, dsz)
+    // R: 3x3 matrix
+    // t: 3x1 vector
+    float sx = R[0] * dsx[idx] + R[1] * dsy[idx] + R[2] * dsz[idx] + t[0];
+    float sy = R[3] * dsx[idx] + R[4] * dsy[idx] + R[5] * dsz[idx] + t[1];
+    float sz = R[6] * dsx[idx] + R[7] * dsy[idx] + R[8] * dsz[idx] + t[2];
+    dsx[idx] = (sx - dtx[idx]) * (sx - dtx[idx]);
+    dsy[idx] = (sy - dty[idx]) * (sy - dty[idx]);
+    dsz[idx] = (sz - dtz[idx]) * (sz - dtz[idx]);
+}
+
 // Get the next transformation
 // gR, R: 3x3 matrix (global and current rotation)
 // gt, t: 3x1 vector (global and current translation)
@@ -62,8 +79,10 @@ float getTranformationError(std::vector<float> const &gR, std::vector<float> con
 }
 
 // Reference: https://learnopencv.com/iterative-closest-point-icp-explained/
-void ICP::align(std::vector<float3> const &source, float maxCorrespondenceDistance, int maximumIterations,
-                float transformationEpsilon, float euclideanFitnessEpsilon, cudaStream_t stream) {
+std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxCorrespondenceDistance,
+                                   int maximumIterations, float transformationEpsilon,
+                                   float euclideanFitnessEpsilon, std::vector<float> &Rt,
+                                   cudaStream_t stream) {
     uint32_t n_source = source.size();
     thrust::device_vector<float3> d_source(source.begin(), source.end());
     thrust::device_vector<uint32_t> inlier(n_source, 0);
@@ -78,14 +97,31 @@ void ICP::align(std::vector<float3> const &source, float maxCorrespondenceDistan
 
     // R and t
     std::vector<float> gR(9, 0.0f);
-    gR[0] = 1.0f, gR[4] = 1.0f, gR[8] = 1.0f;
     std::vector<float> gt(3, 0.0f);
+    // Rt 4x4 matrix
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j)
+            gR[3 * i + j] = Rt[i * 4 + j];
+        gt[i] = Rt[i * 4 + 3];
+    }
     thrust::device_vector<float> dR(9);
     thrust::device_vector<float> dt(3);
 
-    // float prevError = std::numeric_limits<float>::max();
+    cudaMemcpy(thrust::raw_pointer_cast(dR.data()), gR.data(), 9 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(thrust::raw_pointer_cast(dt.data()), gt.data(), 3 * sizeof(float), cudaMemcpyHostToDevice);
+    // Apply the initial transformation
+    uint32_t blockSize = 1 << 8;
+    uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
+    applyTransformation<<<numBlocks, blockSize, 0, stream>>>(thrust::raw_pointer_cast(d_source.data()),
+                                                             n_source, thrust::raw_pointer_cast(dR.data()),
+                                                             thrust::raw_pointer_cast(dt.data()));
+    cudaStreamSynchronize(stream);
 
-    auto policy = thrust::cuda::par.on(stream);
+    float prevError = std::numeric_limits<float>::max();
+    bool converged = false;
+    float percentageInliers = 0.0f;
+
+    auto policy = thrust::device.on(stream);
     for (int i = 0; i < maximumIterations; ++i) {
         // 1. Find correspondences
         kdtree.findCorrespondences(thrust::raw_pointer_cast(d_source.data()), n_source,
@@ -101,9 +137,8 @@ void ICP::align(std::vector<float3> const &source, float maxCorrespondenceDistan
         thrust::inclusive_scan(thrust::device.on(stream), inlier.begin(), inlier.end(), inlier.begin());
         int32_t count; // number of inliers
         thrust::copy(inlier.end() - 1, inlier.end(), &count);
-        if (count < 2) {
-            break; // no inliers
-        }
+        if (count < 2)
+            break;     // no inliers
         int32_t start; // start of inliers
         thrust::copy(inlier.begin(), inlier.begin() + 1, &start);
         start = 1 - start;
@@ -171,27 +206,43 @@ void ICP::align(std::vector<float3> const &source, float maxCorrespondenceDistan
         auto [nR, nt] = getTranformation(gR, gt, R, t);
         float error = getTranformationError(gR, gt, nR, nt);
         if (error < transformationEpsilon) {
+            converged = true;
+            percentageInliers = (float)count / n_source;
             break; // converged
         }
         gR = nR;
         gt = nt;
 
         // 6. Apply the transformation
-        uint32_t blockSize = 1 << 8;
-        uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
         applyTransformation<<<numBlocks, blockSize, 0, stream>>>(
             thrust::raw_pointer_cast(d_source.data()), n_source, thrust::raw_pointer_cast(dR.data()),
             thrust::raw_pointer_cast(dt.data()));
         cudaStreamSynchronize(stream);
 
-        // TODO: Implement the fitness error (euclideanFitnessEpsilon)
+        // 7. Compute the error
+        applyTransformation2<<<numBlocks, blockSize, 0, stream>>>(
+            thrust::raw_pointer_cast(dsx.data()), thrust::raw_pointer_cast(dsy.data()),
+            thrust::raw_pointer_cast(dsz.data()), thrust::raw_pointer_cast(dtx.data()),
+            thrust::raw_pointer_cast(dty.data()), thrust::raw_pointer_cast(dtz.data()), start, count + start,
+            thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
+        cudaStreamSynchronize(stream);
+        float error2 = thrust::reduce(policy, dsx.begin() + start, dsx.begin() + count + start, 0.0f) +
+                       thrust::reduce(policy, dsy.begin() + start, dsy.begin() + count + start, 0.0f) +
+                       thrust::reduce(policy, dsz.begin() + start, dsz.begin() + count + start, 0.0f);
+        cudaStreamSynchronize(stream);
+        error2 = sqrt(error2);
+        if (abs(error2 - prevError) < euclideanFitnessEpsilon) {
+            converged = true;
+            percentageInliers = (float)count / n_source;
+            break; // converged
+        }
+        prevError = error2;
     }
-    // Print gR and gt
-    std::cout << "gR: ";
-    for (int i = 0; i < 9; ++i)
-        std::cout << gR[i] << " ";
-    std::cout << "\ngt: ";
-    for (int i = 0; i < 3; ++i)
-        std::cout << gt[i] << " ";
-    std::cout << "\n";
+    // Copy the final transformation matrix to the output
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j)
+            Rt[i * 4 + j] = gR[3 * i + j];
+        Rt[i * 4 + 3] = gt[i];
+    }
+    return {converged, percentageInliers};
 }
