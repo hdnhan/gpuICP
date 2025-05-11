@@ -3,6 +3,7 @@
 #include <thrust/gather.h>
 #include <thrust/inner_product.h>
 #include <thrust/reduce.h>
+#include <thrust/execution_policy.h>
 
 void ICP::setTarget(std::vector<float3> const &target, cudaStream_t stream) {
     kdtree.buildTree(target, stream);

@@ -1,0 +1,6 @@
+FROM nvcr.io/nvidia/cuda:12.1.1-devel-ubuntu20.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update
+RUN apt-get install -y libpcl-dev python3-pip git
+RUN pip install cmake~=3.31
