@@ -78,10 +78,11 @@ void run(int N, int Q) {
     spdlog::info("CUDA KdTree");
     timer.start();
     timer.start();
-    auto kd = KDTree(source2, stream);
+    auto kdtree = KDTree();
+    kdtree.buildTree(source2, stream);
     timer.end("Build");
     timer.start();
-    auto distances2 = kd.findAllNearestDistance(target2, inlierThreshold, stream);
+    auto distances2 = kdtree.findAllNearestDistance(target2, inlierThreshold, stream);
     timer.end("Queries");
     timer.end("Total Latency");
     cudaStreamDestroy(stream);

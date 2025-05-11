@@ -49,7 +49,7 @@ inline __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint3
     return left;
 }
 
-__global__ void searchIDRange(uint32_t *treeIDs, uint32_t size, uint2 *IDRange, uint32_t level) {
+__global__ void searchIDRange(uint32_t const *treeIDs, uint32_t size, uint2 *IDRange, uint32_t level) {
     // start id (inclusive): 2^level - 1
     // end id (exclusive): 2^(level + 1) - 1
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -63,7 +63,7 @@ __global__ void searchIDRange(uint32_t *treeIDs, uint32_t size, uint2 *IDRange, 
     IDRange[id - (1 << level) + 1].y = end;
 }
 
-__global__ void updateTreeID(uint32_t *treeIDs, uint32_t size, uint2 *IDRange, uint32_t level) {
+__global__ void updateTreeID(uint32_t *treeIDs, uint32_t size, uint2 const *IDRange, uint32_t level) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= size || idx < (1 << level) - 1)
         return;
@@ -196,8 +196,9 @@ __device__ int32_t findNearestPoint(float3 const &point, float3 const *d_target,
     return bestID;
 }
 
-__global__ void findAllNearestDistanceKernel(float3 *d_source, uint32_t n_source, float3 *d_target,
-                                             uint32_t n_target, float *d_distance, float inlierThreshold) {
+__global__ void findAllNearestDistanceKernel(float3 const *d_source, uint32_t n_source,
+                                             float3 const *d_target, uint32_t n_target, float *d_distance,
+                                             float inlierThreshold) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n_source)
         return;
@@ -237,7 +238,7 @@ struct Comparator {
     uint32_t axis;
 };
 
-KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
+void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
     n_target = target.size();
     uint32_t n_level = ceil(log2(n_target + 1));
 
@@ -272,19 +273,51 @@ KDTree::KDTree(std::vector<float3> target, cudaStream_t stream) {
     cudaStreamSynchronize(stream);
 }
 
-std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> source, float inlierThreshold,
+std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &source, float inlierThreshold,
                                                   cudaStream_t stream) {
     uint32_t n_source = source.size();
-    thrust::device_vector<float3> d_sources(source.data(), source.data() + n_source);
+    thrust::device_vector<float3> d_source(source.data(), source.data() + n_source);
     thrust::device_vector<float> d_distance(n_source, -1);
     uint32_t blockSize = 1 << 8;
     uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
     findAllNearestDistanceKernel<<<numBlocks, blockSize, 0, stream>>>(
-        thrust::raw_pointer_cast(d_sources.data()), n_source, thrust::raw_pointer_cast(d_target.data()),
+        thrust::raw_pointer_cast(d_source.data()), n_source, thrust::raw_pointer_cast(d_target.data()),
         n_target, thrust::raw_pointer_cast(d_distance.data()), inlierThreshold);
     cudaStreamSynchronize(stream);
     std::vector<float> estimateDistance(n_source);
     cudaMemcpy(estimateDistance.data(), thrust::raw_pointer_cast(d_distance.data()), n_source * sizeof(float),
                cudaMemcpyDeviceToHost);
     return estimateDistance;
+}
+
+__global__ void findAllNearestIndexKernel(float3 const *d_source, uint32_t n_source, float3 const *d_target,
+                                          uint32_t n_target, float inlierThreshold, uint32_t *inlier,
+                                          float *dsx, float *dsy, float *dsz, float *dtx, float *dty,
+                                          float *dtz) {
+    uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= n_source)
+        return;
+    float3 point = d_source[idx];
+    int32_t id = findNearestPoint(point, d_target, n_target, inlierThreshold);
+    // There is no point in the tree that is in the inlier threshold
+    if (id == -1) {
+        inlier[idx] = 0;
+        dsx[idx] = 0, dsy[idx] = 0, dsz[idx] = 0;
+        dtx[idx] = 0, dty[idx] = 0, dtz[idx] = 0;
+    } else {
+        inlier[idx] = 1;
+        dsx[idx] = point.x, dsy[idx] = point.y, dsz[idx] = point.z;
+        dtx[idx] = d_target[id].x, dty[idx] = d_target[id].y, dtz[idx] = d_target[id].z;
+    }
+}
+
+void KDTree::findCorrespondences(float3 const *d_source, uint32_t n_source, float inlierThreshold,
+                                 uint32_t *inlier, float *dsx, float *dsy, float *dsz, float *dtx, float *dty,
+                                 float *dtz, cudaStream_t stream) {
+    uint32_t blockSize = 1 << 8;
+    uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
+    findAllNearestIndexKernel<<<numBlocks, blockSize, 0, stream>>>(
+        d_source, n_source, thrust::raw_pointer_cast(d_target.data()), n_target, inlierThreshold, inlier, dsx,
+        dsy, dsz, dtx, dty, dtz);
+    cudaStreamSynchronize(stream);
 }
