@@ -1,20 +1,50 @@
 #include "icp.hpp"
 #include "svd.hpp"
+#include <thrust/execution_policy.h>
 #include <thrust/gather.h>
 #include <thrust/inner_product.h>
 #include <thrust/reduce.h>
-#include <thrust/execution_policy.h>
 
 void ICP::setTarget(std::vector<float3> const &target, cudaStream_t stream) {
     kdtree.buildTree(target, stream);
 }
 
+// Add operator for float3
+inline __host__ __device__ float3 operator+(float3 const &a, float3 const &b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+inline __host__ __device__ float3 operator-(float3 const &a, float3 const &b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
+    return {a.x * b.x, a.y * b.y, a.z * b.z};
+}
+
 struct SubtractFunctor {
-    __host__ __device__ SubtractFunctor(float value) : value(value) {}
-    inline __host__ __device__ float operator()(float x) const { return x - value; }
+    __host__ __device__ SubtractFunctor(float3 const &value) : value(value) {}
+    inline __host__ __device__ float3 operator()(float3 x) const { return x - value; }
 
   private:
-    float value;
+    float3 value;
+};
+
+struct BinaryOp1 {
+    inline __host__ __device__ thrust::tuple<float3, float3, float3>
+    operator()(thrust::tuple<float3, float3, float3> const &a,
+               thrust::tuple<float3, float3, float3> const &b) {
+        return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
+                                  thrust::get<1>(a) + thrust::get<1>(b),
+                                  thrust::get<2>(a) + thrust::get<2>(b));
+    };
+};
+
+struct BinaryOp2 {
+    inline __host__ __device__ thrust::tuple<float3, float3, float3> operator()(float3 const &a,
+                                                                                float3 const &b) {
+        return thrust::make_tuple(make_float3(a.x * b.x, a.x * b.y, a.x * b.z),
+                                  make_float3(a.y * b.x, a.y * b.y, a.y * b.z),
+                                  make_float3(a.z * b.x, a.z * b.y, a.z * b.z));
+    };
 };
 
 // in-place operation
@@ -33,20 +63,18 @@ __global__ void applyTransformation(float3 *source, uint32_t n_source, float *R,
 }
 
 // in-place operation, this is for estimating error
-__global__ void applyTransformation2(float *dsx, float *dsy, float *dsz, float *dtx, float *dty, float *dtz,
-                                     uint32_t start, uint32_t end, float *R, float *t) {
+__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t start, uint32_t end, float *R,
+                                     float *t) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < start || idx >= end)
         return;
     // Transform the source points (dsx, dsy, dsz)
     // R: 3x3 matrix
     // t: 3x1 vector
-    float sx = R[0] * dsx[idx] + R[1] * dsy[idx] + R[2] * dsz[idx] + t[0];
-    float sy = R[3] * dsx[idx] + R[4] * dsy[idx] + R[5] * dsz[idx] + t[1];
-    float sz = R[6] * dsx[idx] + R[7] * dsy[idx] + R[8] * dsz[idx] + t[2];
-    dsx[idx] = (sx - dtx[idx]) * (sx - dtx[idx]);
-    dsy[idx] = (sy - dty[idx]) * (sy - dty[idx]);
-    dsz[idx] = (sz - dtz[idx]) * (sz - dtz[idx]);
+    float3 s = {R[0] * source[idx].x + R[1] * source[idx].y + R[2] * source[idx].z + t[0],
+                R[3] * source[idx].x + R[4] * source[idx].y + R[5] * source[idx].z + t[1],
+                R[6] * source[idx].x + R[7] * source[idx].y + R[8] * source[idx].z + t[2]};
+    source[idx] = (s - target[idx]) * (s - target[idx]);
 }
 
 // Get the next transformation
@@ -89,12 +117,10 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
     thrust::device_vector<uint32_t> inlier(n_source, 0);
 
     // Allocate cuda memory for the source and target points
-    thrust::device_vector<float> dsx(n_source), dsy(n_source), dsz(n_source);
-    thrust::device_vector<float> dtx(n_source), dty(n_source), dtz(n_source);
+    thrust::device_vector<float3> dsrc(n_source), dtar(n_source);
 
     // For gathering the inliers
-    thrust::device_vector<float> gsx(n_source), gsy(n_source), gsz(n_source);
-    thrust::device_vector<float> gtx(n_source), gty(n_source), gtz(n_source);
+    thrust::device_vector<float3> gsrc(n_source), gtar(n_source);
 
     // R and t
     std::vector<float> gR(9, 0.0f);
@@ -127,10 +153,8 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         // 1. Find correspondences
         kdtree.findCorrespondences(thrust::raw_pointer_cast(d_source.data()), n_source,
                                    maxCorrespondenceDistance, thrust::raw_pointer_cast(inlier.data()),
-                                   thrust::raw_pointer_cast(dsx.data()), thrust::raw_pointer_cast(dsy.data()),
-                                   thrust::raw_pointer_cast(dsz.data()), thrust::raw_pointer_cast(dtx.data()),
-                                   thrust::raw_pointer_cast(dty.data()), thrust::raw_pointer_cast(dtz.data()),
-                                   stream);
+                                   thrust::raw_pointer_cast(dsrc.data()),
+                                   thrust::raw_pointer_cast(dtar.data()), stream);
         cudaStreamSynchronize(stream);
 
         // 2. Compute centroids
@@ -145,63 +169,39 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         start = 1 - start;
 
         // move all inliers to the front
-        thrust::gather(policy, inlier.begin(), inlier.end(), dsx.begin(), gsx.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dsy.begin(), gsy.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dsz.begin(), gsz.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dtx.begin(), gtx.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dty.begin(), gty.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dtz.begin(), gtz.begin());
+        // TODO: can we do this in-place? if yes, remove gsrc and gtar
+        thrust::gather(policy, inlier.begin(), inlier.end(), dsrc.begin(), gsrc.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dtar.begin(), gtar.begin());
         cudaStreamSynchronize(stream);
         // compute centroids
-        float csx = thrust::reduce(policy, gsx.begin() + start, gsx.begin() + count + start, 0.0f) / count;
-        float csy = thrust::reduce(policy, gsy.begin() + start, gsy.begin() + count + start, 0.0f) / count;
-        float csz = thrust::reduce(policy, gsz.begin() + start, gsz.begin() + count + start, 0.0f) / count;
-        float ctx = thrust::reduce(policy, gtx.begin() + start, gtx.begin() + count + start, 0.0f) / count;
-        float cty = thrust::reduce(policy, gty.begin() + start, gty.begin() + count + start, 0.0f) / count;
-        float ctz = thrust::reduce(policy, gtz.begin() + start, gtz.begin() + count + start, 0.0f) / count;
+        float3 csrc = thrust::reduce(policy, gsrc.begin() + start, gsrc.begin() + count + start,
+                                     float3{0.0f, 0.0f, 0.0f});
+        float3 ctar = thrust::reduce(policy, gtar.begin() + start, gtar.begin() + count + start,
+                                     float3{0.0f, 0.0f, 0.0f});
         cudaStreamSynchronize(stream);
+        csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
+        ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
 
-        // 3. Center the points
-        thrust::transform(policy, gsx.begin() + start, gsx.begin() + count + start, gsx.begin() + start,
-                          SubtractFunctor(csx));
-        thrust::transform(policy, gsy.begin() + start, gsy.begin() + count + start, gsy.begin() + start,
-                          SubtractFunctor(csy));
-        thrust::transform(policy, gsz.begin() + start, gsz.begin() + count + start, gsz.begin() + start,
-                          SubtractFunctor(csz));
-        thrust::transform(policy, gtx.begin() + start, gtx.begin() + count + start, gtx.begin() + start,
-                          SubtractFunctor(ctx));
-        thrust::transform(policy, gty.begin() + start, gty.begin() + count + start, gty.begin() + start,
-                          SubtractFunctor(cty));
-        thrust::transform(policy, gtz.begin() + start, gtz.begin() + count + start, gtz.begin() + start,
-                          SubtractFunctor(ctz));
+        // 3. Center the points, in-place operation
+        thrust::transform(policy, gsrc.begin() + start, gsrc.begin() + count + start, gsrc.begin() + start,
+                          SubtractFunctor(csrc));
+        thrust::transform(policy, gtar.begin() + start, gtar.begin() + count + start, gtar.begin() + start,
+                          SubtractFunctor(ctar));
         cudaStreamSynchronize(stream);
 
         // 4. Compute the covariance matrix
-        std::vector<float> H(9);
-        H[0] = thrust::inner_product(gsx.begin() + start, gsx.begin() + count + start, gtx.begin() + start,
-                                     0.0f);
-        H[1] = thrust::inner_product(gsx.begin() + start, gsx.begin() + count + start, gty.begin() + start,
-                                     0.0f);
-        H[2] = thrust::inner_product(gsx.begin() + start, gsx.begin() + count + start, gtz.begin() + start,
-                                     0.0f);
-
-        H[3] = thrust::inner_product(gsy.begin() + start, gsy.begin() + count + start, gtx.begin() + start,
-                                     0.0f);
-        H[4] = thrust::inner_product(gsy.begin() + start, gsy.begin() + count + start, gty.begin() + start,
-                                     0.0f);
-        H[5] = thrust::inner_product(gsy.begin() + start, gsy.begin() + count + start, gtz.begin() + start,
-                                     0.0f);
-
-        H[6] = thrust::inner_product(gsz.begin() + start, gsz.begin() + count + start, gtx.begin() + start,
-                                     0.0f);
-        H[7] = thrust::inner_product(gsz.begin() + start, gsz.begin() + count + start, gty.begin() + start,
-                                     0.0f);
-        H[8] = thrust::inner_product(gsz.begin() + start, gsz.begin() + count + start, gtz.begin() + start,
-                                     0.0f);
+        auto cov = thrust::inner_product(
+            policy, gsrc.begin() + start, gsrc.begin() + count + start, gtar.begin() + start,
+            thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f),
+                               make_float3(0.0f, 0.0f, 0.0f)),
+            BinaryOp1(), BinaryOp2());
         cudaStreamSynchronize(stream);
+        std::vector<float> H{thrust::get<0>(cov).x, thrust::get<0>(cov).y, thrust::get<0>(cov).z,
+                             thrust::get<1>(cov).x, thrust::get<1>(cov).y, thrust::get<1>(cov).z,
+                             thrust::get<2>(cov).x, thrust::get<2>(cov).y, thrust::get<2>(cov).z};
 
         // 5. Compute Rotation and translation using SVD
-        auto [R, t] = computeRt(H, csx, csy, csz, ctx, cty, ctz);
+        auto [R, t] = computeRt(H, csrc.x, csrc.y, csrc.z, ctar.x, ctar.y, ctar.z);
         cudaMemcpy(thrust::raw_pointer_cast(dR.data()), R.data(), 9 * sizeof(float), cudaMemcpyHostToDevice);
         cudaMemcpy(thrust::raw_pointer_cast(dt.data()), t.data(), 3 * sizeof(float), cudaMemcpyHostToDevice);
         auto [nR, nt] = getTranformation(gR, gt, R, t);
@@ -222,22 +222,19 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
 
         // 7. Compute the Euclidean distance error
         applyTransformation2<<<numBlocks, blockSize, 0, stream>>>(
-            thrust::raw_pointer_cast(dsx.data()), thrust::raw_pointer_cast(dsy.data()),
-            thrust::raw_pointer_cast(dsz.data()), thrust::raw_pointer_cast(dtx.data()),
-            thrust::raw_pointer_cast(dty.data()), thrust::raw_pointer_cast(dtz.data()), start, count + start,
-            thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
+            thrust::raw_pointer_cast(gsrc.data()), thrust::raw_pointer_cast(gtar.data()), start,
+            count + start, thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
         cudaStreamSynchronize(stream);
-        float error2 = thrust::reduce(policy, dsx.begin() + start, dsx.begin() + count + start, 0.0f) +
-                       thrust::reduce(policy, dsy.begin() + start, dsy.begin() + count + start, 0.0f) +
-                       thrust::reduce(policy, dsz.begin() + start, dsz.begin() + count + start, 0.0f);
+        float3 error2 = thrust::reduce(policy, gsrc.begin() + start, gsrc.begin() + count + start,
+                                       make_float3(0.0f, 0.0f, 0.0f));
         cudaStreamSynchronize(stream);
-        error2 = sqrt(error2);
-        if (abs(error2 - prevError) < euclideanFitnessEpsilon) {
+        float error3 = sqrt(error2.x + error2.y + error2.z);
+        if (abs(error3 - prevError) < euclideanFitnessEpsilon) {
             converged = true;
             percentageInliers = (float)count / n_source;
             break; // converged
         }
-        prevError = error2;
+        prevError = error3;
     }
     // Copy the final transformation matrix to the output
     for (int i = 0; i < 3; ++i) {
