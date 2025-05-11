@@ -80,7 +80,8 @@ int main(int argc, char *argv[]) {
         "s", "Source point cloud path", cxxopts::value<std::string>()->default_value("assets/source.ply"))(
         "t", "Target point cloud path", cxxopts::value<std::string>()->default_value("assets/target.ply"))(
         "repeat", "Repeat times", cxxopts::value<int>()->default_value("1"))(
-        "maxiter", "Max iterations", cxxopts::value<int>()->default_value("1000"));
+        "maxiter", "Max iterations", cxxopts::value<int>()->default_value("1000"))(
+        "epsilon", "Inlier threshold", cxxopts::value<float>()->default_value("0.05"));
 
     auto config = options.parse(argc, argv);
     if (config.count("help")) {
@@ -123,7 +124,7 @@ int main(int argc, char *argv[]) {
         targetVec[i].z = target->at(i).z;
     }
 
-    float maxCorrespondenceDistance = 0.05f;
+    float maxCorrespondenceDistance = config["epsilon"].as<float>();
     int maximumIterations = config["maxiter"].as<int>();
     float transformationEpsilon = 1e-8f;
     float euclideanFitnessEpsilon = 1e-8f;
