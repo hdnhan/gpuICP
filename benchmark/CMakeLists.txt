@@ -9,17 +9,23 @@ cpmaddpackage("gh:jarro2783/cxxopts#v3.2.0")
 find_package(PCL REQUIRED)
 find_package(OpenMP REQUIRED)
 
-cuda_add_executable(kdtree_test kdtree.cpp)
-target_include_directories(
-    kdtree_test PUBLIC 
-    ${PCL_INCLUDE_DIRS}
-    ${PROJECT_SOURCE_DIR}/src
+set(target_list 
+    kdtree_test
+    icp_test
 )
-target_link_libraries(
-    kdtree_test  
-    ${PCL_LIBRARIES}
-    OpenMP::OpenMP_CXX
-    cukdtree
-    spdlog::spdlog
-    cxxopts::cxxopts
-)
+foreach(target ${target_list})
+    cuda_add_executable(${target} ${target}.cpp)
+    target_include_directories(
+        ${target} PUBLIC 
+        ${PCL_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/src
+    )
+    target_link_libraries(
+        ${target}  
+        ${PCL_LIBRARIES}
+        OpenMP::OpenMP_CXX
+        cuicp
+        spdlog::spdlog
+        cxxopts::cxxopts
+    )
+endforeach()

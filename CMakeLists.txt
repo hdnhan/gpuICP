@@ -12,9 +12,16 @@ set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
 
 find_package(CUDA REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 add_library(
-  cukdtree SHARED
+  cuicp SHARED
+  src/icp.cu
   src/kdtree.cu
+  src/svd.cpp
+)
+target_include_directories(
+  cuicp PUBLIC 
+  ${EIGEN3_INCLUDE_DIR}
 )
 add_subdirectory(benchmark)
