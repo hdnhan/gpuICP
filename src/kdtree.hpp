@@ -37,15 +37,12 @@ class KDTree {
     @param inlierThreshold: The maximum distance to consider a point as an inlier, if inlierThreshold is
                            non-positive, it will be ignored
     @param inlier: The output array to store the inliers (0: not inlier, 1: inlier)
-    @param dsx, dsy, dsz: The output arrays to store the source point coordinates, if not found the closest
-                          point will be set to 0.0f
-    @param dtx, dty, dtz: The output arrays to store the target point coordinates, if not found the closest
-                          point will be set to 0.0f
+    @param dsrc, dtar: The output arrays to store the source and target point coordinates, if not found the
+                          closest point will be set to 0.0f
     @param stream: CUDA stream to use for finding nearest neighbors
     */
     void findCorrespondences(float3 const *d_source, uint32_t n_source, float inlierThreshold,
-                             uint32_t *inlier, float *dsx, float *dsy, float *dsz, float *dtx, float *dty,
-                             float *dtz, cudaStream_t stream);
+                             uint32_t *inlier, float3 *dsrc, float3 *dtar, cudaStream_t stream);
 
   private:
     uint32_t n_target;
