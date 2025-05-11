@@ -134,7 +134,7 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
 
         // 2. Compute centroids
         // in-place scan: inlier[i] += inlier[i-1]
-        thrust::inclusive_scan(thrust::device.on(stream), inlier.begin(), inlier.end(), inlier.begin());
+        thrust::inclusive_scan(policy, inlier.begin(), inlier.end(), inlier.begin());
         int32_t count; // number of inliers
         thrust::copy(inlier.end() - 1, inlier.end(), &count);
         if (count < 2)
@@ -144,12 +144,12 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         start = 1 - start;
 
         // move all inliers to the front
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dsx.begin(), gsx.begin());
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dsy.begin(), gsy.begin());
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dsz.begin(), gsz.begin());
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dtx.begin(), gtx.begin());
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dty.begin(), gty.begin());
-        thrust::gather(thrust::device.on(stream), inlier.begin(), inlier.end(), dtz.begin(), gtz.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dsx.begin(), gsx.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dsy.begin(), gsy.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dsz.begin(), gsz.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dtx.begin(), gtx.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dty.begin(), gty.begin());
+        thrust::gather(policy, inlier.begin(), inlier.end(), dtz.begin(), gtz.begin());
         cudaStreamSynchronize(stream);
         // compute centroids
         float csx = thrust::reduce(policy, gsx.begin() + start, gsx.begin() + count + start, 0.0f) / count;
@@ -161,18 +161,18 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         cudaStreamSynchronize(stream);
 
         // 3. Center the points
-        thrust::transform(thrust::device.on(stream), gsx.begin() + start, gsx.begin() + count + start,
-                          gsx.begin() + start, SubtractFunctor(csx));
-        thrust::transform(thrust::device.on(stream), gsy.begin() + start, gsy.begin() + count + start,
-                          gsy.begin() + start, SubtractFunctor(csy));
-        thrust::transform(thrust::device.on(stream), gsz.begin() + start, gsz.begin() + count + start,
-                          gsz.begin() + start, SubtractFunctor(csz));
-        thrust::transform(thrust::device.on(stream), gtx.begin() + start, gtx.begin() + count + start,
-                          gtx.begin() + start, SubtractFunctor(ctx));
-        thrust::transform(thrust::device.on(stream), gty.begin() + start, gty.begin() + count + start,
-                          gty.begin() + start, SubtractFunctor(cty));
-        thrust::transform(thrust::device.on(stream), gtz.begin() + start, gtz.begin() + count + start,
-                          gtz.begin() + start, SubtractFunctor(ctz));
+        thrust::transform(policy, gsx.begin() + start, gsx.begin() + count + start, gsx.begin() + start,
+                          SubtractFunctor(csx));
+        thrust::transform(policy, gsy.begin() + start, gsy.begin() + count + start, gsy.begin() + start,
+                          SubtractFunctor(csy));
+        thrust::transform(policy, gsz.begin() + start, gsz.begin() + count + start, gsz.begin() + start,
+                          SubtractFunctor(csz));
+        thrust::transform(policy, gtx.begin() + start, gtx.begin() + count + start, gtx.begin() + start,
+                          SubtractFunctor(ctx));
+        thrust::transform(policy, gty.begin() + start, gty.begin() + count + start, gty.begin() + start,
+                          SubtractFunctor(cty));
+        thrust::transform(policy, gtz.begin() + start, gtz.begin() + count + start, gtz.begin() + start,
+                          SubtractFunctor(ctz));
         cudaStreamSynchronize(stream);
 
         // 4. Compute the covariance matrix
@@ -213,13 +213,13 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         gR = nR;
         gt = nt;
 
-        // 6. Apply the transformation
+        // 6. Apply the transformation to the source points
         applyTransformation<<<numBlocks, blockSize, 0, stream>>>(
             thrust::raw_pointer_cast(d_source.data()), n_source, thrust::raw_pointer_cast(dR.data()),
             thrust::raw_pointer_cast(dt.data()));
         cudaStreamSynchronize(stream);
 
-        // 7. Compute the error
+        // 7. Compute the Euclidean distance error
         applyTransformation2<<<numBlocks, blockSize, 0, stream>>>(
             thrust::raw_pointer_cast(dsx.data()), thrust::raw_pointer_cast(dsy.data()),
             thrust::raw_pointer_cast(dsz.data()), thrust::raw_pointer_cast(dtx.data()),

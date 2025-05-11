@@ -4,17 +4,14 @@
 std::tuple<std::vector<float>, std::vector<float>> computeRt(std::vector<float> const &H, float sx, float sy,
                                                              float sz, float tx, float ty, float tz) {
     // Check if the input matrix H is 3x3
-    if (H.size() != 9) {
+    if (H.size() != 9)
         throw std::invalid_argument("Input matrix H must be of size 3x3.");
-    }
 
     // Convert the input vector to an Eigen matrix
     Eigen::Matrix3f matrix_H;
-    for (size_t i = 0; i < 3; ++i) {
-        for (size_t j = 0; j < 3; ++j) {
+    for (size_t i = 0; i < 3; ++i)
+        for (size_t j = 0; j < 3; ++j)
             matrix_H(i, j) = H[i * 3 + j];
-        }
-    }
 
     // Perform SVD decomposition using Eigen
     // H = U * S * V^T
