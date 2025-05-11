@@ -2,6 +2,7 @@
 #include <thrust/iterator/zip_iterator.h> // make_zip_iterator
 #include <thrust/sort.h>                  // stable_sort
 #include <thrust/tuple.h>                 // make_tuple
+#include <thrust/execution_policy.h>
 
 /*
 The final tree structure should be like this:
