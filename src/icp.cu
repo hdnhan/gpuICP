@@ -28,6 +28,14 @@ struct SubtractFunctor {
     float3 value;
 };
 
+/*
+BinaryOp1 and BinaryOp2 are used in thrust::inner_product
+for example:
+    - x is first array
+    - y is second array
+    - init is the initial value
+=> init op1 (x1 op2 y1) op1 (x2 op2 y2) op1 ... op1 (xn op2 yn)
+*/
 struct BinaryOp1 {
     inline __host__ __device__ thrust::tuple<float3, float3, float3>
     operator()(thrust::tuple<float3, float3, float3> const &a,
@@ -48,7 +56,7 @@ struct BinaryOp2 {
 };
 
 // in-place operation
-__global__ void applyTransformation(float3 *source, uint32_t n_source, float *R, float *t) {
+__global__ void applyTransformation(float3 *source, uint32_t n_source, float const *R, float const *t) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_source)
         return;
@@ -63,8 +71,8 @@ __global__ void applyTransformation(float3 *source, uint32_t n_source, float *R,
 }
 
 // in-place operation, this is for estimating error
-__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t start, uint32_t end, float *R,
-                                     float *t) {
+__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t start, uint32_t end,
+                                     float const *R, float const *t) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < start || idx >= end)
         return;

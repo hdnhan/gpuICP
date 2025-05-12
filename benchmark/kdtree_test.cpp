@@ -109,10 +109,12 @@ void run(int N, int Q) {
 
 int main(int argc, char *argv[]) {
     cxxopts::Options options("./build/benchmark/kdtree_test", "KdTree Benchmark");
-    options.add_options()("h,help", "Show help")("N", "Number of points in KdTree",
-                                                 cxxopts::value<int>()->default_value("1000000"))(
-        "Q", "Number of queries", cxxopts::value<int>()->default_value("1000000"))(
-        "iter", "Number of iterations", cxxopts::value<int>()->default_value("1"));
+    // clang-format off
+    options.add_options()("h,help", "Show help")(
+        "N", "Number of points in KdTree", cxxopts::value<int>()->default_value("1000000"))(
+        "Q", "Number of queries/points", cxxopts::value<int>()->default_value("1000000"))(
+        "r,repeat", "Repeat times", cxxopts::value<int>()->default_value("1"));
+    // clang-format on
     auto config = options.parse(argc, argv);
     if (config.count("help")) {
         std::cout << options.help() << std::endl;
@@ -125,13 +127,13 @@ int main(int argc, char *argv[]) {
 
     int N = config["N"].as<int>();
     int Q = config["Q"].as<int>();
-    int iter = config["iter"].as<int>();
+    int repeat = config["repeat"].as<int>();
     spdlog::info("N: {}, Q: {}, iter: {}", N, Q, iter);
 
     for (int i = 0; i < iter; ++i) {
-        spdlog::info("Iteration: {}", i + 1);
+        spdlog::info("Repeat: {}", i + 1);
         run(N, Q);
     }
-    spdlog::info("Finished all iterations");
+    spdlog::info("Finished all repeats.");
     return 0;
 }

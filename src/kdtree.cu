@@ -117,8 +117,8 @@ __device__ int32_t findNearestPoint(float3 const &point, float3 const *d_target,
     uint32_t level = 0;
     float diff, currDistance;
 
-    // Check if currID is a valid point
     while (true) {
+        // Check if currID is a valid point
         // try to move down to the tree (children) given the current id
         while (currID < maxPoints && !(level == n_level - 1 && missingPointsEnd != missingPointsStart)) {
             if (level == n_level - 1)
@@ -318,5 +318,4 @@ void KDTree::findCorrespondences(float3 const *d_source, uint32_t n_source, floa
     findAllNearestIndexKernel<<<numBlocks, blockSize, 0, stream>>>(
         d_source, n_source, thrust::raw_pointer_cast(d_target.data()), n_target, inlierThreshold, inlier,
         dsrc, dtar);
-    cudaStreamSynchronize(stream);
 }
