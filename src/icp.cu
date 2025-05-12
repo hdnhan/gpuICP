@@ -64,35 +64,40 @@ struct BinaryOp2 {
     };
 };
 
+// Transformation: Points * R + t
 // in-place operation
-__global__ void applyTransformation(float3 *source, uint32_t n_source, float const *R, float const *t) {
-    int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n_source)
-        return;
-    // R: 3x3 matrix
-    // t: 3x1 vector
-    float3 s = source[idx];
-    float3 r;
-    r.x = R[0] * s.x + R[1] * s.y + R[2] * s.z + t[0];
-    r.y = R[3] * s.x + R[4] * s.y + R[5] * s.z + t[1];
-    r.z = R[6] * s.x + R[7] * s.y + R[8] * s.z + t[2];
-    source[idx] = r;
-}
+struct TransformFunctor {
+    __host__ __device__ TransformFunctor(float *R, float *t) : R(R), t(t) {}
+    inline __host__ __device__ void operator()(float3 &p) const {
+        float3 transformed = {R[0] * p.x + R[1] * p.y + R[2] * p.z + t[0],
+                              R[3] * p.x + R[4] * p.y + R[5] * p.z + t[1],
+                              R[6] * p.x + R[7] * p.y + R[8] * p.z + t[2]};
+        p = transformed;
+    }
 
-// in-place operation, this is for estimating error
-__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t count, float const *R,
-                                     float const *t) {
-    int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= count)
-        return;
-    // Transform the source points (dsx, dsy, dsz)
-    // R: 3x3 matrix
-    // t: 3x1 vector
-    float3 s = {R[0] * source[idx].x + R[1] * source[idx].y + R[2] * source[idx].z + t[0],
-                R[3] * source[idx].x + R[4] * source[idx].y + R[5] * source[idx].z + t[1],
-                R[6] * source[idx].x + R[7] * source[idx].y + R[8] * source[idx].z + t[2]};
-    source[idx] = (s - target[idx]) * (s - target[idx]);
-}
+  private:
+    float *R; // 3x3 matrix
+    float *t; // 3x1 vector
+};
+
+// Euclidean distance error
+struct EuclideanDistanceFunctor {
+    __host__ __device__ EuclideanDistanceFunctor(float *R, float *t) : R(R), t(t) {}
+    inline __host__ __device__ float operator()(thrust::tuple<float3, float3> const &p) const {
+        float3 src = thrust::get<0>(p);
+        float3 tar = thrust::get<1>(p);
+        float3 transformed = {R[0] * src.x + R[1] * src.y + R[2] * src.z + t[0],
+                              R[3] * src.x + R[4] * src.y + R[5] * src.z + t[1],
+                              R[6] * src.x + R[7] * src.y + R[8] * src.z + t[2]};
+        // Compute the Euclidean distance
+        float3 diff = transformed - tar;
+        return diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+    }
+
+  private:
+    float *R; // 3x3 matrix
+    float *t; // 3x1 vector
+};
 
 // Get the next transformation
 // gR, R: 3x3 matrix (global and current rotation)
@@ -154,18 +159,16 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
     cudaMemcpy(thrust::raw_pointer_cast(dR.data()), gR.data(), 9 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(thrust::raw_pointer_cast(dt.data()), gt.data(), 3 * sizeof(float), cudaMemcpyHostToDevice);
     // Apply the initial transformation
-    uint32_t blockSize = 1 << 8;
-    uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
-    applyTransformation<<<numBlocks, blockSize, 0, stream>>>(thrust::raw_pointer_cast(d_source.data()),
-                                                             n_source, thrust::raw_pointer_cast(dR.data()),
-                                                             thrust::raw_pointer_cast(dt.data()));
+    auto policy = thrust::device.on(stream);
+    thrust::for_each(
+        policy, d_source.begin(), d_source.end(),
+        TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
     cudaStreamSynchronize(stream);
 
     float prevError = std::numeric_limits<float>::max();
     bool converged = false;
     float percentageInliers = 0.0f;
 
-    auto policy = thrust::device.on(stream);
     for (int i = 0; i < maximumIterations; ++i) {
         // 1. Find correspondences
         kdtree.findCorrespondences(thrust::raw_pointer_cast(d_source.data()), n_source,
@@ -224,26 +227,26 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         gt = nt;
 
         // 6. Apply the transformation to the source points
-        applyTransformation<<<numBlocks, blockSize, 0, stream>>>(
-            thrust::raw_pointer_cast(d_source.data()), n_source, thrust::raw_pointer_cast(dR.data()),
-            thrust::raw_pointer_cast(dt.data()));
+        thrust::for_each(
+            policy, d_source.begin(), d_source.end(),
+            TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
         cudaStreamSynchronize(stream);
 
         // 7. Compute the Euclidean distance error
-        applyTransformation2<<<numBlocks, blockSize, 0, stream>>>(
-            thrust::raw_pointer_cast(gsrc.data()), thrust::raw_pointer_cast(gtar.data()), count,
-            thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
+        auto begin = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin(), gtar.begin()));
+        auto end = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin() + count, gtar.begin() + count));
+        error = thrust::transform_reduce(policy, begin, end,
+                                         EuclideanDistanceFunctor(thrust::raw_pointer_cast(dR.data()),
+                                                                  thrust::raw_pointer_cast(dt.data())),
+                                         0.0f, thrust::plus<float>());
         cudaStreamSynchronize(stream);
-        float3 error2 =
-            thrust::reduce(policy, gsrc.begin(), gsrc.begin() + count, make_float3(0.0f, 0.0f, 0.0f));
-        cudaStreamSynchronize(stream);
-        float error3 = sqrt(error2.x + error2.y + error2.z);
-        if (abs(error3 - prevError) < euclideanFitnessEpsilon) {
+        error = sqrt(error);
+        if (abs(error - prevError) < euclideanFitnessEpsilon) {
             converged = true;
             percentageInliers = (float)count / n_source;
             break; // converged
         }
-        prevError = error3;
+        prevError = error;
     }
     // Copy the final transformation matrix to the output
     for (int i = 0; i < 3; ++i) {

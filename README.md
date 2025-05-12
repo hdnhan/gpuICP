@@ -19,5 +19,9 @@ cmake --build build --config Release --parallel
 ./build/benchmark/kdtree_test -N 1000000 -Q 1000000 --repeat 2
 
 # Run ICP benchmark
-./build/benchmark/icp_test --repeat 1 --maxiter 1000 -s assets/source.ply -t assets/target.ply
+./build/benchmark/icp_test \
+    --repeat 1 \
+    --maxiter 1000 \
+    -s assets/source.ply \
+    -t assets/target.ply
 ```
