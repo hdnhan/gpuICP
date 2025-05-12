@@ -90,8 +90,8 @@ struct EuclideanDistanceFunctor {
                               R[3] * src.x + R[4] * src.y + R[5] * src.z + t[1],
                               R[6] * src.x + R[7] * src.y + R[8] * src.z + t[2]};
         // Compute the Euclidean distance
-        float3 diff = transformed - tar;
-        return diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        float3 dist = (transformed - tar) * (transformed - tar);
+        return dist.x + dist.y + dist.z;
     }
 
   private:
