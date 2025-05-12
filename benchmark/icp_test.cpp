@@ -76,13 +76,14 @@ std::tuple<bool, float> pclICP(pcl::PointCloud<pcl::PointXYZ>::Ptr source,
 
 int main(int argc, char *argv[]) {
     cxxopts::Options options("./build/benchmark/icp_test", "ICP Benchmark");
+    // clang-format off
     options.add_options()("h,help", "Show help")(
-        "s", "Source point cloud path", cxxopts::value<std::string>()->default_value("assets/source.ply"))(
-        "t", "Target point cloud path", cxxopts::value<std::string>()->default_value("assets/target.ply"))(
+        "s,source", "Source point cloud path", cxxopts::value<std::string>()->default_value("assets/source.ply"))(
+        "t,target", "Target point cloud path", cxxopts::value<std::string>()->default_value("assets/target.ply"))(
         "repeat", "Repeat times", cxxopts::value<int>()->default_value("1"))(
         "maxiter", "Max iterations", cxxopts::value<int>()->default_value("1000"))(
         "epsilon", "Inlier threshold", cxxopts::value<float>()->default_value("0.05"));
-
+    // clang-format on
     auto config = options.parse(argc, argv);
     if (config.count("help")) {
         std::cout << options.help() << std::endl;
@@ -94,8 +95,8 @@ int main(int argc, char *argv[]) {
     // spdlog::set_level(spdlog::level::debug);
     spdlog::set_pattern("[%x %X.%e] [%^%l%$] %v");
 
-    std::string sourcePath = config["s"].as<std::string>();
-    std::string targetPath = config["t"].as<std::string>();
+    std::string sourcePath = config["source"].as<std::string>();
+    std::string targetPath = config["target"].as<std::string>();
     int repeat = config["repeat"].as<int>();
     spdlog::info("Source: {}, Target: {}, repeat: {}", sourcePath, targetPath, repeat);
 
@@ -113,16 +114,10 @@ int main(int argc, char *argv[]) {
     spdlog::info("Source size: {}, Target size: {}", source->size(), target->size());
     std::vector<float3> sourceVec(source->size());
     std::vector<float3> targetVec(target->size());
-    for (int i = 0; i < source->size(); ++i) {
-        sourceVec[i].x = source->at(i).x;
-        sourceVec[i].y = source->at(i).y;
-        sourceVec[i].z = source->at(i).z;
-    }
-    for (int i = 0; i < target->size(); ++i) {
-        targetVec[i].x = target->at(i).x;
-        targetVec[i].y = target->at(i).y;
-        targetVec[i].z = target->at(i).z;
-    }
+    for (int i = 0; i < source->size(); ++i)
+        sourceVec[i] = {source->at(i).x, source->at(i).y, source->at(i).z};
+    for (int i = 0; i < target->size(); ++i)
+        targetVec[i] = {target->at(i).x, target->at(i).y, target->at(i).z};
 
     float maxCorrespondenceDistance = config["epsilon"].as<float>();
     int maximumIterations = config["maxiter"].as<int>();
@@ -130,12 +125,12 @@ int main(int argc, char *argv[]) {
     float euclideanFitnessEpsilon = 1e-8f;
 
     for (int it = 0; it < repeat; ++it) {
-        spdlog::info("Iteration: {}", it);
+        spdlog::info("Repeat: {}", it);
 
         // Start with PCL ICP
-        Eigen::Matrix4f init = Eigen::Matrix4f::Identity();
+        Eigen::Matrix4f Rt = Eigen::Matrix4f::Identity();
         timer.start();
-        auto [converged, percent] = pclICP(source, target, init, maxCorrespondenceDistance, maximumIterations,
+        auto [converged, percent] = pclICP(source, target, Rt, maxCorrespondenceDistance, maximumIterations,
                                            transformationEpsilon, euclideanFitnessEpsilon);
         timer.end("PCL ICP");
         if (converged)
@@ -145,7 +140,7 @@ int main(int argc, char *argv[]) {
         spdlog::info("PCL ICP result:");
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j)
-                printf("%f ", init(i, j));
+                printf("%f ", Rt(i, j));
             printf("\n");
         }
         printf("\n");
@@ -175,6 +170,6 @@ int main(int argc, char *argv[]) {
         }
         cudaStreamDestroy(stream);
     }
-    spdlog::info("Done.");
+    spdlog::info("Finished all repeats.");
     return 0;
 }
