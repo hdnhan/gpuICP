@@ -3,6 +3,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/gather.h>
 #include <thrust/inner_product.h>
+#include <thrust/partition.h>
 #include <thrust/reduce.h>
 
 void ICP::setTarget(std::vector<float3> const &target, cudaStream_t stream) {
@@ -26,6 +27,14 @@ struct SubtractFunctor {
 
   private:
     float3 value;
+};
+
+struct PartitionLess {
+    __host__ __device__ PartitionLess(uint32_t n_source) : n_source(n_source) {}
+    inline __host__ __device__ bool operator()(uint32_t const &x) { return x < n_source; }
+
+  private:
+    uint32_t n_source;
 };
 
 /*
@@ -71,10 +80,10 @@ __global__ void applyTransformation(float3 *source, uint32_t n_source, float con
 }
 
 // in-place operation, this is for estimating error
-__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t start, uint32_t end,
-                                     float const *R, float const *t) {
+__global__ void applyTransformation2(float3 *source, float3 *target, uint32_t count, float const *R,
+                                     float const *t) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < start || idx >= end)
+    if (idx >= count)
         return;
     // Transform the source points (dsx, dsy, dsz)
     // R: 3x3 matrix
@@ -166,43 +175,35 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         cudaStreamSynchronize(stream);
 
         // 2. Compute centroids
-        // in-place scan: inlier[i] += inlier[i-1]
-        thrust::inclusive_scan(policy, inlier.begin(), inlier.end(), inlier.begin());
-        int32_t count; // number of inliers
-        thrust::copy(inlier.end() - 1, inlier.end(), &count);
+        // NOTE: Don't need to sort the inliers, just partition them is enough
+        auto it = thrust::partition(policy, inlier.begin(), inlier.end(), PartitionLess(n_source));
+        cudaStreamSynchronize(stream);
+        int32_t count = thrust::distance(inlier.begin(), it); // number of inliers
         if (count < 2)
-            break;     // no inliers
-        int32_t start; // start of inliers
-        thrust::copy(inlier.begin(), inlier.begin() + 1, &start);
-        start = 1 - start;
+            break; // no inliers
 
         // move all inliers to the front
-        // TODO: can we do this in-place? if yes, remove gsrc and gtar
         thrust::gather(policy, inlier.begin(), inlier.end(), dsrc.begin(), gsrc.begin());
         thrust::gather(policy, inlier.begin(), inlier.end(), dtar.begin(), gtar.begin());
         cudaStreamSynchronize(stream);
         // compute centroids
-        float3 csrc = thrust::reduce(policy, gsrc.begin() + start, gsrc.begin() + count + start,
-                                     float3{0.0f, 0.0f, 0.0f});
-        float3 ctar = thrust::reduce(policy, gtar.begin() + start, gtar.begin() + count + start,
-                                     float3{0.0f, 0.0f, 0.0f});
+        float3 csrc = thrust::reduce(policy, gsrc.begin(), gsrc.begin() + count, float3{0.0f, 0.0f, 0.0f});
+        float3 ctar = thrust::reduce(policy, gtar.begin(), gtar.begin() + count, float3{0.0f, 0.0f, 0.0f});
         cudaStreamSynchronize(stream);
         csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
         ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
 
         // 3. Center the points, in-place operation
-        thrust::transform(policy, gsrc.begin() + start, gsrc.begin() + count + start, gsrc.begin() + start,
-                          SubtractFunctor(csrc));
-        thrust::transform(policy, gtar.begin() + start, gtar.begin() + count + start, gtar.begin() + start,
-                          SubtractFunctor(ctar));
+        thrust::transform(policy, gsrc.begin(), gsrc.begin() + count, gsrc.begin(), SubtractFunctor(csrc));
+        thrust::transform(policy, gtar.begin(), gtar.begin() + count, gtar.begin(), SubtractFunctor(ctar));
         cudaStreamSynchronize(stream);
 
         // 4. Compute the covariance matrix
-        auto cov = thrust::inner_product(
-            policy, gsrc.begin() + start, gsrc.begin() + count + start, gtar.begin() + start,
-            thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f),
-                               make_float3(0.0f, 0.0f, 0.0f)),
-            BinaryOp1(), BinaryOp2());
+        auto cov = thrust::inner_product(policy, gsrc.begin(), gsrc.begin() + count, gtar.begin(),
+                                         thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f),
+                                                            make_float3(0.0f, 0.0f, 0.0f),
+                                                            make_float3(0.0f, 0.0f, 0.0f)),
+                                         BinaryOp1(), BinaryOp2());
         cudaStreamSynchronize(stream);
         std::vector<float> H{thrust::get<0>(cov).x, thrust::get<0>(cov).y, thrust::get<0>(cov).z,
                              thrust::get<1>(cov).x, thrust::get<1>(cov).y, thrust::get<1>(cov).z,
@@ -230,11 +231,11 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
 
         // 7. Compute the Euclidean distance error
         applyTransformation2<<<numBlocks, blockSize, 0, stream>>>(
-            thrust::raw_pointer_cast(gsrc.data()), thrust::raw_pointer_cast(gtar.data()), start,
-            count + start, thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
+            thrust::raw_pointer_cast(gsrc.data()), thrust::raw_pointer_cast(gtar.data()), count,
+            thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data()));
         cudaStreamSynchronize(stream);
-        float3 error2 = thrust::reduce(policy, gsrc.begin() + start, gsrc.begin() + count + start,
-                                       make_float3(0.0f, 0.0f, 0.0f));
+        float3 error2 =
+            thrust::reduce(policy, gsrc.begin(), gsrc.begin() + count, make_float3(0.0f, 0.0f, 0.0f));
         cudaStreamSynchronize(stream);
         float error3 = sqrt(error2.x + error2.y + error2.z);
         if (abs(error3 - prevError) < euclideanFitnessEpsilon) {

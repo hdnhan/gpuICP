@@ -301,11 +301,11 @@ __global__ void findAllNearestIndexKernel(float3 const *d_source, uint32_t n_sou
     int32_t id = findNearestPoint(point, d_target, n_target, inlierThreshold);
     // There is no point in the tree that is in the inlier threshold
     if (id == -1) {
-        inlier[idx] = 0;
+        inlier[idx] = n_source;
         dsrc[idx] = {0, 0, 0};
         dtar[idx] = {0, 0, 0};
     } else {
-        inlier[idx] = 1;
+        inlier[idx] = idx;
         dsrc[idx] = point;
         dtar[idx] = d_target[id];
     }
