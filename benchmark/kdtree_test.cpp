@@ -128,9 +128,9 @@ int main(int argc, char *argv[]) {
     int N = config["N"].as<int>();
     int Q = config["Q"].as<int>();
     int repeat = config["repeat"].as<int>();
-    spdlog::info("N: {}, Q: {}, iter: {}", N, Q, iter);
+    spdlog::info("N: {}, Q: {}, repeat: {}", N, Q, repeat);
 
-    for (int i = 0; i < iter; ++i) {
+    for (int i = 0; i < repeat; ++i) {
         spdlog::info("Repeat: {}", i + 1);
         run(N, Q);
     }
