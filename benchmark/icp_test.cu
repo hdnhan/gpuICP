@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
     float euclideanFitnessEpsilon = 1e-8f;
 
     for (int it = 0; it < repeat; ++it) {
-        spdlog::info("Repeat: {}", it);
+        spdlog::info("Repeat: {}", it + 1);
 
         // Start with PCL ICP
         Eigen::Matrix4f Rt = Eigen::Matrix4f::Identity();
