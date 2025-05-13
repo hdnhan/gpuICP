@@ -25,3 +25,14 @@ cmake --build build --config Release --parallel
     -s assets/source.ply \
     -t assets/target.ply
 ```
+
+### Run on Kaggle P100
+https://www.kaggle.com/code/hdnhan28/benchmark-cuicp-vs-pcl-icp
+
+| cuKdTree | PCL KdTree |
+|----------|------------|
+| 73ms     | 4105ms     |
+
+| cuICP | PCL ICP |
+|-------|---------|
+| 37ms  | 3006ms  |
