@@ -26,13 +26,22 @@ cmake --build build --config Release --parallel
     -t assets/target.ply
 ```
 
-### Run on Kaggle P100
-https://www.kaggle.com/code/hdnhan28/benchmark-cuicp-vs-pcl-icp
+### Run on g4ad.xlarge (AMD instance)
+| GPU KdTree | PCL KdTree |
+|----------|------------|
+| 89ms     | 2433ms     |
 
-| cuKdTree | PCL KdTree |
+| GPU ICP | PCL ICP |
+|-------|---------|
+| 57ms  | 1173ms  |
+
+### Run on Kaggle P100
+https://www.kaggle.com/code/hdnhan28/benchmark-gpu-icp-vs-pcl-icp
+
+| GPU KdTree | PCL KdTree |
 |----------|------------|
 | 73ms     | 4105ms     |
 
-| cuICP | PCL ICP |
+| GPU ICP | PCL ICP |
 |-------|---------|
 | 37ms  | 3006ms  |

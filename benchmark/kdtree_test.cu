@@ -74,8 +74,8 @@ void run(int N, int Q) {
     timer.end("PCL KdTree");
 
     cudaStream_t stream;
-    cudaStreamCreate(&stream);
-    spdlog::info("CUDA KdTree");
+    GPU_CHECK(cudaStreamCreate(&stream));
+    spdlog::info("GPU KdTree");
     timer.start();
     timer.start();
     auto kdtree = KDTree();
@@ -85,7 +85,7 @@ void run(int N, int Q) {
     auto distances2 = kdtree.findAllNearestDistance(target2, inlierThreshold, stream);
     timer.end("Queries");
     timer.end("Total Latency");
-    cudaStreamDestroy(stream);
+    GPU_CHECK(cudaStreamDestroy(stream));
 
     if (distances.size() != distances2.size()) {
         spdlog::error("Distances size mismatch.");

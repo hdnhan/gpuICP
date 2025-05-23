@@ -1,7 +1,14 @@
 #pragma once
 
-#include <cstdint>
+#ifdef CUDA_FOUND
 #include <cuda_runtime.h>
+#endif
+#ifdef HIP_FOUND
+#include <hip/hip_runtime.h>
+#endif
+
+#include "utils.hpp"
+#include <cstdint>
 #include <thrust/device_vector.h>
 #include <vector>
 

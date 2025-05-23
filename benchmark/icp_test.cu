@@ -43,7 +43,7 @@ float pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl:
         if (kdtree->radiusSearch(target->at(i), inlierThreshold, indices, distances, 1) > 0)
             minDistances[i] = std::sqrt(distances[0]);
     }
-    float sumDistances = 0, count = 0;
+    float count = 0;
     for (int i = 0; i < minDistances.size(); ++i) {
         if (minDistances[i] > 0)
             count++;
@@ -146,7 +146,7 @@ int main(int argc, char *argv[]) {
         printf("\n");
 
         cudaStream_t stream;
-        cudaStreamCreate(&stream);
+        GPU_CHECK(cudaStreamCreate(&stream));
 
         std::vector<float> cuRt(16, 0); // Acts as initial guess
         for (int i = 0; i < 4; ++i)
@@ -157,18 +157,18 @@ int main(int argc, char *argv[]) {
         icp.setTarget(targetVec, stream);
         auto [converged2, percent2] = icp.align(sourceVec, maxCorrespondenceDistance, maximumIterations,
                                                 transformationEpsilon, euclideanFitnessEpsilon, cuRt, stream);
-        timer.end("CUDA ICP");
+        timer.end("GPU ICP");
         if (converged2)
-            spdlog::info("CUDA ICP converged, percent: {}", percent2 * 100);
+            spdlog::info("GPU ICP converged, percent: {}", percent2 * 100);
         else
-            spdlog::error("CUDA ICP not converged.");
-        spdlog::info("CUDA ICP result:");
+            spdlog::error("GPU ICP not converged.");
+        spdlog::info("GPU ICP result:");
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j)
                 printf("%f ", cuRt[i * 4 + j]);
             printf("\n");
         }
-        cudaStreamDestroy(stream);
+        GPU_CHECK(cudaStreamDestroy(stream));
     }
     spdlog::info("Finished all repeats.");
     return 0;
