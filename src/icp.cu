@@ -17,9 +17,11 @@ inline __host__ __device__ float3 operator+(float3 const &a, float3 const &b) {
 inline __host__ __device__ float3 operator-(float3 const &a, float3 const &b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
+#ifdef CUDA_FOUND
 inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
     return {a.x * b.x, a.y * b.y, a.z * b.z};
 }
+#endif
 
 struct SubtractFunctor {
     __host__ __device__ SubtractFunctor(float3 const &value) : value(value) {}
@@ -156,14 +158,16 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
     thrust::device_vector<float> dR(9);
     thrust::device_vector<float> dt(3);
 
-    cudaMemcpy(thrust::raw_pointer_cast(dR.data()), gR.data(), 9 * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(thrust::raw_pointer_cast(dt.data()), gt.data(), 3 * sizeof(float), cudaMemcpyHostToDevice);
+    GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dR.data()), gR.data(), 9 * sizeof(float),
+                         cudaMemcpyHostToDevice));
+    GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dt.data()), gt.data(), 3 * sizeof(float),
+                         cudaMemcpyHostToDevice));
     // Apply the initial transformation
     auto policy = thrust::device.on(stream);
     thrust::for_each(
         policy, d_source.begin(), d_source.end(),
         TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
-    cudaStreamSynchronize(stream);
+    GPU_CHECK(cudaStreamSynchronize(stream));
 
     float prevError = std::numeric_limits<float>::max();
     bool converged = false;
@@ -175,12 +179,12 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
                                    maxCorrespondenceDistance, thrust::raw_pointer_cast(inlier.data()),
                                    thrust::raw_pointer_cast(dsrc.data()),
                                    thrust::raw_pointer_cast(dtar.data()), stream);
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
 
         // 2. Compute centroids
         // NOTE: Don't need to sort the inliers, just partition them is enough
         auto it = thrust::partition(policy, inlier.begin(), inlier.end(), PartitionLess(n_source));
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         int32_t count = thrust::distance(inlier.begin(), it); // number of inliers
         if (count < 2)
             break; // no inliers
@@ -188,18 +192,18 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         // move all inliers to the front
         thrust::gather(policy, inlier.begin(), inlier.end(), dsrc.begin(), gsrc.begin());
         thrust::gather(policy, inlier.begin(), inlier.end(), dtar.begin(), gtar.begin());
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         // compute centroids
         float3 csrc = thrust::reduce(policy, gsrc.begin(), gsrc.begin() + count, float3{0.0f, 0.0f, 0.0f});
         float3 ctar = thrust::reduce(policy, gtar.begin(), gtar.begin() + count, float3{0.0f, 0.0f, 0.0f});
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
         ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
 
         // 3. Center the points, in-place operation
         thrust::transform(policy, gsrc.begin(), gsrc.begin() + count, gsrc.begin(), SubtractFunctor(csrc));
         thrust::transform(policy, gtar.begin(), gtar.begin() + count, gtar.begin(), SubtractFunctor(ctar));
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
 
         // 4. Compute the covariance matrix
         auto cov = thrust::inner_product(policy, gsrc.begin(), gsrc.begin() + count, gtar.begin(),
@@ -207,15 +211,17 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
                                                             make_float3(0.0f, 0.0f, 0.0f),
                                                             make_float3(0.0f, 0.0f, 0.0f)),
                                          BinaryOp1(), BinaryOp2());
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         std::vector<float> H{thrust::get<0>(cov).x, thrust::get<0>(cov).y, thrust::get<0>(cov).z,
                              thrust::get<1>(cov).x, thrust::get<1>(cov).y, thrust::get<1>(cov).z,
                              thrust::get<2>(cov).x, thrust::get<2>(cov).y, thrust::get<2>(cov).z};
 
         // 5. Compute Rotation and translation using SVD
         auto [R, t] = computeRt(H, csrc.x, csrc.y, csrc.z, ctar.x, ctar.y, ctar.z);
-        cudaMemcpy(thrust::raw_pointer_cast(dR.data()), R.data(), 9 * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(thrust::raw_pointer_cast(dt.data()), t.data(), 3 * sizeof(float), cudaMemcpyHostToDevice);
+        GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dR.data()), R.data(), 9 * sizeof(float),
+                             cudaMemcpyHostToDevice));
+        GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dt.data()), t.data(), 3 * sizeof(float),
+                             cudaMemcpyHostToDevice));
         auto [nR, nt] = getTranformation(gR, gt, R, t);
         float error = getTranformationError(gR, gt, nR, nt);
         if (error < transformationEpsilon) {
@@ -230,7 +236,7 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         thrust::for_each(
             policy, d_source.begin(), d_source.end(),
             TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
 
         // 7. Compute the Euclidean distance error
         auto begin = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin(), gtar.begin()));
@@ -239,7 +245,7 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
                                          EuclideanDistanceFunctor(thrust::raw_pointer_cast(dR.data()),
                                                                   thrust::raw_pointer_cast(dt.data())),
                                          0.0f, thrust::plus<float>());
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         error = sqrt(error);
         if (abs(error - prevError) < euclideanFitnessEpsilon) {
             converged = true;

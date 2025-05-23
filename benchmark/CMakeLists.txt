@@ -14,7 +14,16 @@ set(target_list
     icp_test
 )
 foreach(target ${target_list})
-    cuda_add_executable(${target} ${target}.cu)
+    if(CUDA_FOUND)
+        cuda_add_executable(${target} ${target}.cu)
+        target_compile_definitions(${target} PRIVATE CUDA_FOUND)
+    endif()
+
+    if(HIP_FOUND)
+        add_executable(${target} ${target}.hip)
+        target_compile_definitions(${target} PRIVATE HIP_FOUND)
+    endif()
+
     target_include_directories(
         ${target} PUBLIC 
         ${PCL_INCLUDE_DIRS}
@@ -24,7 +33,7 @@ foreach(target ${target_list})
         ${target}  
         ${PCL_LIBRARIES}
         OpenMP::OpenMP_CXX
-        cuicp
+        gpuicp
         spdlog::spdlog
         cxxopts::cxxopts
     )

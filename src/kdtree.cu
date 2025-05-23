@@ -246,8 +246,8 @@ void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
     // Assuming all points are root of the tree
     thrust::device_vector<uint32_t> treeIDs(n_target, 0);
     d_target = thrust::device_vector<float3>(n_target);
-    cudaMemcpy(thrust::raw_pointer_cast(d_target.data()), target.data(), target.size() * sizeof(float3),
-               cudaMemcpyHostToDevice);
+    GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(d_target.data()), target.data(),
+                         target.size() * sizeof(float3), cudaMemcpyHostToDevice));
 
     // Create the zip iterators for sorting
     auto begin = thrust::make_zip_iterator(thrust::make_tuple(treeIDs.begin(), d_target.begin()));
@@ -264,14 +264,14 @@ void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
     auto *IDRangePtr = thrust::raw_pointer_cast(IDRange.data());
     for (uint32_t level = 0; level < n_level - 1; ++level) {
         thrust::stable_sort(thrust::device.on(stream), begin, end, Comparator(level % 3));
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         searchIDRange<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
         updateTreeID<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
-        cudaStreamSynchronize(stream);
+        GPU_CHECK(cudaStreamSynchronize(stream));
     }
     thrust::stable_sort(thrust::device.on(stream), begin, end, Comparator(n_level % 3));
-    cudaStreamSynchronize(stream);
+    GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
 std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &source, float inlierThreshold,
@@ -284,10 +284,10 @@ std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &sou
     findAllNearestDistanceKernel<<<numBlocks, blockSize, 0, stream>>>(
         thrust::raw_pointer_cast(d_source.data()), n_source, thrust::raw_pointer_cast(d_target.data()),
         n_target, thrust::raw_pointer_cast(d_distance.data()), inlierThreshold);
-    cudaStreamSynchronize(stream);
+    GPU_CHECK(cudaStreamSynchronize(stream));
     std::vector<float> estimateDistance(n_source);
-    cudaMemcpy(estimateDistance.data(), thrust::raw_pointer_cast(d_distance.data()), n_source * sizeof(float),
-               cudaMemcpyDeviceToHost);
+    GPU_CHECK(cudaMemcpy(estimateDistance.data(), thrust::raw_pointer_cast(d_distance.data()),
+                         n_source * sizeof(float), cudaMemcpyDeviceToHost));
     return estimateDistance;
 }
 
