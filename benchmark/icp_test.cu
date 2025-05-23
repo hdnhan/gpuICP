@@ -43,7 +43,7 @@ float pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl:
         if (kdtree->radiusSearch(target->at(i), inlierThreshold, indices, distances, 1) > 0)
             minDistances[i] = std::sqrt(distances[0]);
     }
-    float sumDistances = 0, count = 0;
+    float count = 0;
     for (int i = 0; i < minDistances.size(); ++i) {
         if (minDistances[i] > 0)
             count++;

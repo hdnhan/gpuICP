@@ -36,7 +36,7 @@ cmake --build build --config Release --parallel
 | 57ms  | 1173ms  |
 
 ### Run on Kaggle P100
-https://www.kaggle.com/code/hdnhan28/benchmark-cuicp-vs-pcl-icp
+https://www.kaggle.com/code/hdnhan28/benchmark-gpu-icp-vs-pcl-icp
 
 | GPU KdTree | PCL KdTree |
 |----------|------------|
