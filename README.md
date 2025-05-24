@@ -39,9 +39,9 @@ cmake --build build --config Release --parallel
 https://www.kaggle.com/code/hdnhan28/benchmark-gpu-icp-vs-pcl-icp
 
 | GPU KdTree | PCL KdTree |
-|----------|------------|
-| 73ms     | 4105ms     |
+|----------|--------------|
+| 61ms     | 4105ms       |
 
 | GPU ICP | PCL ICP |
-|-------|---------|
-| 37ms  | 3006ms  |
+|-------|-----------|
+| 6ms   | 3006ms    |
