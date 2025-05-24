@@ -28,12 +28,12 @@ cmake --build build --config Release --parallel
 
 ### Run on g4ad.xlarge (AMD instance)
 | GPU KdTree | PCL KdTree |
-|----------|------------|
-| 89ms     | 2433ms     |
+|------------|------------|
+| 83ms       | 2433ms     |
 
 | GPU ICP | PCL ICP |
-|-------|---------|
-| 57ms  | 1173ms  |
+|---------|---------|
+| 39ms    | 1173ms  |
 
 ### Run on Kaggle P100
 https://www.kaggle.com/code/hdnhan28/benchmark-gpu-icp-vs-pcl-icp
