@@ -269,6 +269,7 @@ void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
         GPU_CHECK(cudaStreamSynchronize(stream));
         updateTreeID<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
         GPU_CHECK(cudaStreamSynchronize(stream));
+        if (level > 0) begin += (1 << (level - 1)); // ignore previous levels as they are already sorted
     }
     thrust::stable_sort(thrust::device(alloc).on(stream), begin, end, Comparator(n_level % 3));
 }
