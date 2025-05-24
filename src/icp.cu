@@ -22,13 +22,25 @@ inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
     return {a.x * b.x, a.y * b.y, a.z * b.z};
 }
 #endif
+inline __host__ __device__ float3 operator/(float3 const &a, float b) { return {a.x / b, a.y / b, a.z / b}; }
+
+struct SumFunctor {
+    inline __host__ __device__ thrust::tuple<float3, float3>
+    operator()(thrust::tuple<float3, float3> const &x, thrust::tuple<float3, float3> const &y) const {
+        return thrust::make_tuple(thrust::get<0>(x) + thrust::get<0>(y),
+                                  thrust::get<1>(x) + thrust::get<1>(y));
+    }
+};
 
 struct SubtractFunctor {
-    __host__ __device__ SubtractFunctor(float3 const &value) : value(value) {}
-    inline __host__ __device__ float3 operator()(float3 x) const { return x - value; }
+    __host__ __device__ SubtractFunctor(float3 const &csrc, float3 const &ctar) : csrc(csrc), ctar(ctar) {}
+    inline __host__ __device__ thrust::tuple<float3, float3>
+    operator()(thrust::tuple<float3, float3> const &x) const {
+        return thrust::make_tuple(thrust::get<0>(x) - csrc, thrust::get<1>(x) - ctar);
+    }
 
   private:
-    float3 value;
+    float3 csrc, ctar; // centroids
 };
 
 struct PartitionLess {
@@ -163,16 +175,17 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
     GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dt.data()), gt.data(), 3 * sizeof(float),
                          cudaMemcpyHostToDevice));
     // Apply the initial transformation
-    auto policy = thrust::device.on(stream);
+    CachingAllocator<char> alloc;
+    auto policy = thrust::device(alloc).on(stream);
     thrust::for_each(
         policy, d_source.begin(), d_source.end(),
         TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
-    GPU_CHECK(cudaStreamSynchronize(stream));
 
     float prevError = std::numeric_limits<float>::max();
     bool converged = false;
     float percentageInliers = 0.0f;
 
+    auto begin = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin(), gtar.begin()));
     for (int i = 0; i < maximumIterations; ++i) {
         // 1. Find correspondences
         kdtree.findCorrespondences(thrust::raw_pointer_cast(d_source.data()), n_source,
@@ -184,26 +197,22 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         // 2. Compute centroids
         // NOTE: Don't need to sort the inliers, just partition them is enough
         auto it = thrust::partition(policy, inlier.begin(), inlier.end(), PartitionLess(n_source));
-        GPU_CHECK(cudaStreamSynchronize(stream));
         int32_t count = thrust::distance(inlier.begin(), it); // number of inliers
         if (count < 2)
             break; // no inliers
 
         // move all inliers to the front
-        thrust::gather(policy, inlier.begin(), inlier.end(), dsrc.begin(), gsrc.begin());
-        thrust::gather(policy, inlier.begin(), inlier.end(), dtar.begin(), gtar.begin());
-        GPU_CHECK(cudaStreamSynchronize(stream));
+        thrust::gather(policy, inlier.begin(), it, dsrc.begin(), gsrc.begin());
+        thrust::gather(policy, inlier.begin(), it, dtar.begin(), gtar.begin());
         // compute centroids
-        float3 csrc = thrust::reduce(policy, gsrc.begin(), gsrc.begin() + count, float3{0.0f, 0.0f, 0.0f});
-        float3 ctar = thrust::reduce(policy, gtar.begin(), gtar.begin() + count, float3{0.0f, 0.0f, 0.0f});
-        GPU_CHECK(cudaStreamSynchronize(stream));
-        csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
-        ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
+        auto [csrc, ctar] = thrust::reduce(
+            policy, begin, begin + count,
+            thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f)), SumFunctor());
+        csrc = csrc / (float)count;
+        ctar = ctar / (float)count;
 
         // 3. Center the points, in-place operation
-        thrust::transform(policy, gsrc.begin(), gsrc.begin() + count, gsrc.begin(), SubtractFunctor(csrc));
-        thrust::transform(policy, gtar.begin(), gtar.begin() + count, gtar.begin(), SubtractFunctor(ctar));
-        GPU_CHECK(cudaStreamSynchronize(stream));
+        thrust::transform(policy, begin, begin + count, begin, SubtractFunctor(csrc, ctar));
 
         // 4. Compute the covariance matrix
         auto cov = thrust::inner_product(policy, gsrc.begin(), gsrc.begin() + count, gtar.begin(),
@@ -211,7 +220,6 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
                                                             make_float3(0.0f, 0.0f, 0.0f),
                                                             make_float3(0.0f, 0.0f, 0.0f)),
                                          BinaryOp1(), BinaryOp2());
-        GPU_CHECK(cudaStreamSynchronize(stream));
         std::vector<float> H{thrust::get<0>(cov).x, thrust::get<0>(cov).y, thrust::get<0>(cov).z,
                              thrust::get<1>(cov).x, thrust::get<1>(cov).y, thrust::get<1>(cov).z,
                              thrust::get<2>(cov).x, thrust::get<2>(cov).y, thrust::get<2>(cov).z};
@@ -236,16 +244,12 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         thrust::for_each(
             policy, d_source.begin(), d_source.end(),
             TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
-        GPU_CHECK(cudaStreamSynchronize(stream));
 
         // 7. Compute the Euclidean distance error
-        auto begin = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin(), gtar.begin()));
-        auto end = thrust::make_zip_iterator(thrust::make_tuple(gsrc.begin() + count, gtar.begin() + count));
-        error = thrust::transform_reduce(policy, begin, end,
+        error = thrust::transform_reduce(policy, begin, begin + count,
                                          EuclideanDistanceFunctor(thrust::raw_pointer_cast(dR.data()),
                                                                   thrust::raw_pointer_cast(dt.data())),
                                          0.0f, thrust::plus<float>());
-        GPU_CHECK(cudaStreamSynchronize(stream));
         error = sqrt(error);
         if (abs(error - prevError) < euclideanFitnessEpsilon) {
             converged = true;
