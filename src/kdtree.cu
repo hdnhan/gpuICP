@@ -269,7 +269,8 @@ void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
         GPU_CHECK(cudaStreamSynchronize(stream));
         updateTreeID<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
         GPU_CHECK(cudaStreamSynchronize(stream));
-        if (level > 0) begin += (1 << (level - 1)); // ignore previous levels as they are already sorted
+        if (level > 0)
+            begin += (1 << (level - 1)); // ignore previous levels as they are already sorted
     }
     thrust::stable_sort(thrust::device(alloc).on(stream), begin, end, Comparator(n_level % 3));
 }
@@ -292,7 +293,7 @@ std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &sou
 }
 
 __global__ void findAllNearestIndexKernel(float3 const *d_source, uint32_t n_source, float3 const *d_target,
-                                          uint32_t n_target, float inlierThreshold, uint32_t *inlier,
+                                          uint32_t n_target, float inlierThreshold, bool *inlier,
                                           float3 *dsrc, float3 *dtar) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n_source)
@@ -301,18 +302,18 @@ __global__ void findAllNearestIndexKernel(float3 const *d_source, uint32_t n_sou
     int32_t id = findNearestPoint(point, d_target, n_target, inlierThreshold);
     // There is no point in the tree that is in the inlier threshold
     if (id == -1) {
-        inlier[idx] = n_source;
+        inlier[idx] = false;
         dsrc[idx] = {0, 0, 0};
         dtar[idx] = {0, 0, 0};
     } else {
-        inlier[idx] = idx;
+        inlier[idx] = true;
         dsrc[idx] = point;
         dtar[idx] = d_target[id];
     }
 }
 
 void KDTree::findCorrespondences(float3 const *d_source, uint32_t n_source, float inlierThreshold,
-                                 uint32_t *inlier, float3 *dsrc, float3 *dtar, cudaStream_t stream) {
+                                 bool *inlier, float3 *dsrc, float3 *dtar, cudaStream_t stream) {
     uint32_t blockSize = 1 << 8;
     uint32_t numBlocks = (n_source + blockSize - 1) / blockSize;
     findAllNearestIndexKernel<<<numBlocks, blockSize, 0, stream>>>(
