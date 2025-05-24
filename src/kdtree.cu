@@ -262,17 +262,16 @@ void KDTree::buildTree(std::vector<float3> const &target, cudaStream_t stream) {
 
     auto *treeIDsPtr = thrust::raw_pointer_cast(treeIDs.data());
     auto *IDRangePtr = thrust::raw_pointer_cast(IDRange.data());
-    CachingAllocator<char> alloc;
     for (uint32_t level = 0; level < n_level - 1; ++level) {
-        thrust::stable_sort(thrust::device(alloc).on(stream), begin, end, Comparator(level % 3));
+        thrust::stable_sort(thrust::device.on(stream), begin, end, Comparator(level % 3));
+        GPU_CHECK(cudaStreamSynchronize(stream));
         searchIDRange<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
         GPU_CHECK(cudaStreamSynchronize(stream));
         updateTreeID<<<numBlocks, blockSize, 0, stream>>>(treeIDsPtr, n_target, IDRangePtr, level);
         GPU_CHECK(cudaStreamSynchronize(stream));
-        if (level > 0)
-            begin += (1 << (level - 1)); // ignore previous levels as they are already sorted
     }
-    thrust::stable_sort(thrust::device(alloc).on(stream), begin, end, Comparator(n_level % 3));
+    thrust::stable_sort(thrust::device.on(stream), begin, end, Comparator(n_level % 3));
+    GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
 std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &source, float inlierThreshold,

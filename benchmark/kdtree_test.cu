@@ -133,7 +133,6 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < repeat; ++i) {
         spdlog::info("Repeat: {}", i + 1);
         run(N, Q);
-        printf("\n");
     }
     spdlog::info("Finished all repeats.");
     return 0;
