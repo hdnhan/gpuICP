@@ -7,7 +7,6 @@
 #include <pcl/kdtree/kdtree.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/registration/icp.h>
-#include <random>
 #include <spdlog/cfg/env.h>
 #include <spdlog/spdlog.h>
 #include <tuple>
@@ -143,7 +142,6 @@ int main(int argc, char *argv[]) {
                 printf("%f ", Rt(i, j));
             printf("\n");
         }
-        printf("\n");
 
         cudaStream_t stream;
         GPU_CHECK(cudaStreamCreate(&stream));
@@ -168,6 +166,7 @@ int main(int argc, char *argv[]) {
                 printf("%f ", cuRt[i * 4 + j]);
             printf("\n");
         }
+        printf("\n");
         GPU_CHECK(cudaStreamDestroy(stream));
     }
     spdlog::info("Finished all repeats.");
