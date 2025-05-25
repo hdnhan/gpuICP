@@ -1,8 +1,6 @@
 #include "icp.hpp"
 #include "svd.hpp"
 #include <thrust/execution_policy.h>
-#include <thrust/gather.h>
-#include <thrust/host_vector.h>
 #include <thrust/inner_product.h>
 #include <thrust/partition.h>
 #include <thrust/reduce.h>
@@ -27,9 +25,8 @@ inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
 struct SumFunctor {
     inline __host__ __device__ thrust::tuple<float3, float3>
     operator()(thrust::tuple<float3, float3> const &x, thrust::tuple<float3, float3> const &y) const {
-        auto const &[srcx, tarx] = x;
-        auto const &[srcy, tary] = y;
-        return thrust::make_tuple(srcx + srcy, tarx + tary);
+        return thrust::make_tuple(thrust::get<0>(x) + thrust::get<0>(y),
+                                  thrust::get<1>(x) + thrust::get<1>(y));
     }
 };
 
@@ -37,8 +34,7 @@ struct SubtractFunctor {
     __host__ __device__ SubtractFunctor(float3 const &csrc, float3 const &ctar) : csrc(csrc), ctar(ctar) {}
     inline __host__ __device__ thrust::tuple<float3, float3>
     operator()(thrust::tuple<float3, float3> const &x) const {
-        auto const &[src, tar] = x;
-        return thrust::make_tuple(src - csrc, tar - ctar);
+        return thrust::make_tuple(thrust::get<0>(x) - csrc, thrust::get<1>(x) - ctar);
     }
 
   private:
@@ -197,9 +193,11 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
             break; // no inliers
 
         // compute centroids
-        auto [csrc, ctar] = thrust::reduce(
+        auto centroids = thrust::reduce(
             policy, begin, begin + count,
             thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f), make_float3(0.0f, 0.0f, 0.0f)), SumFunctor());
+        auto csrc = thrust::get<0>(centroids);
+        auto ctar = thrust::get<1>(centroids);
         csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
         ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
 
