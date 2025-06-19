@@ -26,7 +26,7 @@ IDRange[5] = [9, 12)
 IDRange[6] = [12, 15)
 */
 
-__forceinline__ __device__ uint32_t lowerBound(uint32_t const *data, uint32_t size, uint32_t value) {
+inline __device__ uint32_t lowerBound(uint32_t const *data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
         uint32_t mid = (left + right) / 2;
@@ -38,7 +38,7 @@ __forceinline__ __device__ uint32_t lowerBound(uint32_t const *data, uint32_t si
     return left;
 }
 
-__forceinline__ __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint32_t value) {
+inline __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
         uint32_t mid = (left + right) / 2;
@@ -82,14 +82,14 @@ __global__ void updateTreeID(uint32_t *treeIDs, uint32_t size, uint2 const *IDRa
 }
 
 // Not using sqrt to make it faster
-__forceinline__ __device__ float estimateDistance(float3 const &a, float3 const &b) {
+inline __device__ float estimateDistance(float3 const &a, float3 const &b) {
     float dx = a.x - b.x;
     float dy = a.y - b.y;
     float dz = a.z - b.z;
     return dx * dx + dy * dy + dz * dz;
 }
 
-__forceinline__ __device__ float getDifference(float3 const &point, float3 const &target, uint32_t axis) {
+inline __device__ float getDifference(float3 const &point, float3 const &target, uint32_t axis) {
     if (axis == 0)
         return point.x - target.x;
     else if (axis == 1)
@@ -212,7 +212,7 @@ __global__ void findAllNearestDistanceKernel(float3 const *d_source, uint32_t n_
         d_distance[idx] = sqrt(estimateDistance(point, d_target[id]));
 }
 
-__forceinline__ __host__ __device__ float getAxisValue(float3 const &point, uint32_t axis) {
+inline __host__ __device__ float getAxisValue(float3 const &point, uint32_t axis) {
     if (axis == 0)
         return point.x;
     else if (axis == 1)
@@ -223,7 +223,7 @@ __forceinline__ __host__ __device__ float getAxisValue(float3 const &point, uint
 
 struct Comparator {
     __host__ __device__ Comparator(uint32_t axis) : axis(axis) {}
-    __forceinline__ __host__ __device__ bool operator()(thrust::tuple<uint32_t, float3> const &a,
+    inline __host__ __device__ bool operator()(thrust::tuple<uint32_t, float3> const &a,
                                                thrust::tuple<uint32_t, float3> const &b) {
         // Group by id first, then sort by value
         auto idA = thrust::get<0>(a);
