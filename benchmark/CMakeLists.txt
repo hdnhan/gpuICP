@@ -17,11 +17,11 @@ foreach(target ${target_list})
     if(CUDA_FOUND)
         cuda_add_executable(${target} ${target}.cu)
         target_compile_definitions(${target} PRIVATE CUDA_FOUND)
-    endif()
-
-    if(HIP_FOUND)
+    elseif(HIP_FOUND)
         add_executable(${target} ${target}.hip)
         target_compile_definitions(${target} PRIVATE HIP_FOUND)
+    else()
+        message(FATAL_ERROR "Neither CUDA nor HIP found. Please install one of them.")
     endif()
 
     target_include_directories(

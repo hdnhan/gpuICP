@@ -17,6 +17,8 @@ find_package(Eigen3 REQUIRED)
 
 if (NOT CUDA_FOUND AND NOT HIP_FOUND)
   message(FATAL_ERROR "CUDA or HIP not found. Please install CUDA or HIP.")
+elseif (CUDA_FOUND AND HIP_FOUND)
+  message(STATUS "Both CUDA and HIP found. Using CUDA by default.")
 endif()
 
 set(target gpuicp)
@@ -25,13 +27,13 @@ if(CUDA_FOUND)
   file(GLOB_RECURSE SOURCES src/*.cu src/*.cpp)
   add_library(${target} SHARED ${SOURCES})
   target_compile_definitions(${target} PRIVATE CUDA_FOUND)
-endif()
-
-if(HIP_FOUND)
+elseif(HIP_FOUND)
   enable_language(HIP)
   file(GLOB_RECURSE SOURCES src/*.hip src/*.cpp)
   add_library(${target} SHARED ${SOURCES})
   target_compile_definitions(${target} PRIVATE HIP_FOUND)
+else()
+  message(FATAL_ERROR "Neither CUDA nor HIP found. Please install one of them.")
 endif()
 
 target_include_directories(
