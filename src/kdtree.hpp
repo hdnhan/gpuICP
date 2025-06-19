@@ -2,8 +2,7 @@
 
 #ifdef CUDA_FOUND
 #include <cuda_runtime.h>
-#endif
-#ifdef HIP_FOUND
+#elif defined(HIP_FOUND)
 #include <hip/hip_runtime.h>
 #endif
 

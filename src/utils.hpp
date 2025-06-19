@@ -2,7 +2,7 @@
 
 #include <thrust/device_allocator.h>
 
-constexpr int error_exit_code = -1;
+constexpr int error_exit_code = 1;
 
 #ifdef HIP_FOUND
 #define cudaStream_t hipStream_t
@@ -23,9 +23,7 @@ constexpr int error_exit_code = -1;
         }                                                                                                    \
     }
 
-#endif
-
-#ifdef CUDA_FOUND
+#elif defined(CUDA_FOUND)
 #define GPU_CHECK(condition)                                                                                 \
     {                                                                                                        \
         const cudaError_t error = condition;                                                                 \

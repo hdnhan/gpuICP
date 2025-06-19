@@ -10,39 +10,28 @@ void ICP::setTarget(std::vector<float3> const &target, cudaStream_t stream) {
 }
 
 // Add operator for float3
-inline __host__ __device__ float3 operator+(float3 const &a, float3 const &b) {
+__forceinline__ __host__ __device__ float3 operator+(float3 const &a, float3 const &b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
-inline __host__ __device__ float3 operator-(float3 const &a, float3 const &b) {
+__forceinline__ __host__ __device__ float3 operator-(float3 const &a, float3 const &b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 #ifdef CUDA_FOUND
-inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
+__forceinline__ __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
     return {a.x * b.x, a.y * b.y, a.z * b.z};
 }
 #endif
 
 struct SumFunctor {
-    inline __host__ __device__ thrust::tuple<float3, float3>
+    __forceinline__ __host__ __device__ thrust::tuple<float3, float3>
     operator()(thrust::tuple<float3, float3> const &x, thrust::tuple<float3, float3> const &y) const {
         return thrust::make_tuple(thrust::get<0>(x) + thrust::get<0>(y),
                                   thrust::get<1>(x) + thrust::get<1>(y));
     }
 };
 
-struct SubtractFunctor {
-    __host__ __device__ SubtractFunctor(float3 const &csrc, float3 const &ctar) : csrc(csrc), ctar(ctar) {}
-    inline __host__ __device__ thrust::tuple<float3, float3>
-    operator()(thrust::tuple<float3, float3> const &x) const {
-        return thrust::make_tuple(thrust::get<0>(x) - csrc, thrust::get<1>(x) - ctar);
-    }
-
-  private:
-    float3 csrc, ctar; // centroids
-};
-
 struct PartitionLess {
-    inline __host__ __device__ bool operator()(bool x) { return x; }
+    __forceinline__ __host__ __device__ bool operator()(bool const x) { return x; }
 };
 
 /*
@@ -54,7 +43,7 @@ for example:
 => init op1 (x1 op2 y1) op1 (x2 op2 y2) op1 ... op1 (xn op2 yn)
 */
 struct BinaryOp1 {
-    inline __host__ __device__ thrust::tuple<float3, float3, float3>
+    __forceinline__ __host__ __device__ thrust::tuple<float3, float3, float3>
     operator()(thrust::tuple<float3, float3, float3> const &a,
                thrust::tuple<float3, float3, float3> const &b) {
         return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
@@ -64,19 +53,24 @@ struct BinaryOp1 {
 };
 
 struct BinaryOp2 {
-    inline __host__ __device__ thrust::tuple<float3, float3, float3> operator()(float3 const &a,
-                                                                                float3 const &b) {
+    __host__ __device__ BinaryOp2(float3 const &csrc, float3 const &ctar) : csrc(csrc), ctar(ctar) {}
+    __forceinline__ __host__ __device__ thrust::tuple<float3, float3, float3> operator()(float3 const &src,
+                                                                                         float3 const &tar) {
+        float3 a = src - csrc, b = tar - ctar;
         return thrust::make_tuple(make_float3(a.x * b.x, a.x * b.y, a.x * b.z),
                                   make_float3(a.y * b.x, a.y * b.y, a.y * b.z),
                                   make_float3(a.z * b.x, a.z * b.y, a.z * b.z));
     };
+
+  private:
+    float3 csrc, ctar; // centroids
 };
 
 // Transformation: Points * R + t
 // in-place operation
 struct TransformFunctor {
     __host__ __device__ TransformFunctor(float *R, float *t) : R(R), t(t) {}
-    inline __host__ __device__ void operator()(float3 &p) const {
+    __forceinline__ __host__ __device__ void operator()(float3 &p) const {
         float3 transformed = {R[0] * p.x + R[1] * p.y + R[2] * p.z + t[0],
                               R[3] * p.x + R[4] * p.y + R[5] * p.z + t[1],
                               R[6] * p.x + R[7] * p.y + R[8] * p.z + t[2]};
@@ -91,7 +85,7 @@ struct TransformFunctor {
 // Euclidean distance error
 struct EuclideanDistanceFunctor {
     __host__ __device__ EuclideanDistanceFunctor(float *R, float *t) : R(R), t(t) {}
-    inline __host__ __device__ float operator()(thrust::tuple<float3, float3> const &p) const {
+    __forceinline__ __host__ __device__ float operator()(thrust::tuple<float3, float3> const &p) const {
         float3 src = thrust::get<0>(p);
         float3 tar = thrust::get<1>(p);
         float3 transformed = {R[0] * src.x + R[1] * src.y + R[2] * src.z + t[0],
@@ -187,7 +181,6 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         // 2. Compute centroids
         // move all inliers to the front
         auto it = thrust::partition(policy, begin, begin + n_source, inlier.begin(), PartitionLess());
-        GPU_CHECK(cudaStreamSynchronize(stream));
         uint32_t count = thrust::distance(begin, it); // number of inliers
         if (count < 2)
             break; // no inliers
@@ -201,20 +194,17 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
         csrc = {csrc.x / count, csrc.y / count, csrc.z / count};
         ctar = {ctar.x / count, ctar.y / count, ctar.z / count};
 
-        // 3. Center the points, in-place operation
-        thrust::transform(policy, begin, begin + count, begin, SubtractFunctor(csrc, ctar));
-
-        // 4. Compute the covariance matrix
+        // 3. Compute the cross-covariance matrix
         auto cov = thrust::inner_product(policy, dsrc.begin(), dsrc.begin() + count, dtar.begin(),
                                          thrust::make_tuple(make_float3(0.0f, 0.0f, 0.0f),
                                                             make_float3(0.0f, 0.0f, 0.0f),
                                                             make_float3(0.0f, 0.0f, 0.0f)),
-                                         BinaryOp1(), BinaryOp2());
+                                         BinaryOp1(), BinaryOp2(csrc, ctar));
         std::vector<float> H{thrust::get<0>(cov).x, thrust::get<0>(cov).y, thrust::get<0>(cov).z,
                              thrust::get<1>(cov).x, thrust::get<1>(cov).y, thrust::get<1>(cov).z,
                              thrust::get<2>(cov).x, thrust::get<2>(cov).y, thrust::get<2>(cov).z};
 
-        // 5. Compute Rotation and translation using SVD
+        // 4. Compute Rotation and translation using SVD
         auto [R, t] = computeRt(H, csrc.x, csrc.y, csrc.z, ctar.x, ctar.y, ctar.z);
         GPU_CHECK(cudaMemcpy(thrust::raw_pointer_cast(dR.data()), R.data(), 9 * sizeof(float),
                              cudaMemcpyHostToDevice));
@@ -229,12 +219,12 @@ std::tuple<bool, float> ICP::align(std::vector<float3> const &source, float maxC
             break; // converged
         }
 
-        // 6. Apply the transformation to the source points
+        // 5. Apply the transformation to the source points
         thrust::for_each(
             policy, d_source.begin(), d_source.end(),
             TransformFunctor(thrust::raw_pointer_cast(dR.data()), thrust::raw_pointer_cast(dt.data())));
 
-        // 7. Compute the Euclidean distance error
+        // 6. Compute the Euclidean distance error
         error = thrust::transform_reduce(policy, begin, begin + count,
                                          EuclideanDistanceFunctor(thrust::raw_pointer_cast(dR.data()),
                                                                   thrust::raw_pointer_cast(dt.data())),

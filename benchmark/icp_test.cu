@@ -32,25 +32,16 @@ class Timer {
 float pclKDTree(pcl::PointCloud<pcl::PointXYZ>::Ptr source, pcl::PointCloud<pcl::PointXYZ>::Ptr target,
                 float inlierThreshold) {
     pcl::KdTree<pcl::PointXYZ>::Ptr kdtree(new pcl::KdTreeFLANN<pcl::PointXYZ>);
-    kdtree->setInputCloud(source);
+    kdtree->setInputCloud(target);
 
-    std::vector<float> minDistances(target->size(), -1);
-#pragma omp parallel for
-    for (int i = 0; i < target->size(); ++i) {
+    int count = 0;
+#pragma omp parallel for reduction(+ : count)
+    for (int i = 0; i < source->size(); ++i) {
         std::vector<int> indices;
         std::vector<float> distances;
-        if (kdtree->radiusSearch(target->at(i), inlierThreshold, indices, distances, 1) > 0)
-            minDistances[i] = std::sqrt(distances[0]);
+        count += kdtree->radiusSearch(source->at(i), inlierThreshold, indices, distances, 1) > 0;
     }
-    float count = 0;
-    for (int i = 0; i < minDistances.size(); ++i) {
-        if (minDistances[i] > 0)
-            count++;
-    }
-    float percent = 0;
-    if (count > 0)
-        percent = (float)count / source->size();
-    return percent;
+    return (float)count / source->size();
 }
 
 std::tuple<bool, float> pclICP(pcl::PointCloud<pcl::PointXYZ>::Ptr source,
@@ -81,7 +72,7 @@ int main(int argc, char *argv[]) {
         "t,target", "Target point cloud path", cxxopts::value<std::string>()->default_value("assets/target.ply"))(
         "repeat", "Repeat times", cxxopts::value<int>()->default_value("1"))(
         "maxiter", "Max iterations", cxxopts::value<int>()->default_value("1000"))(
-        "epsilon", "Inlier threshold", cxxopts::value<float>()->default_value("0.05"));
+        "epsilon", "Inlier threshold", cxxopts::value<float>()->default_value("0.005"));
     // clang-format on
     auto config = options.parse(argc, argv);
     if (config.count("help")) {
@@ -133,7 +124,7 @@ int main(int argc, char *argv[]) {
                                            transformationEpsilon, euclideanFitnessEpsilon);
         timer.end("PCL ICP");
         if (converged)
-            spdlog::info("PCL ICP converged, percent: {}", percent * 100);
+            spdlog::info("PCL ICP converged, inlier percentage: {}", percent * 100);
         else
             spdlog::error("PCL ICP not converged.");
         spdlog::info("PCL ICP result:");
@@ -157,7 +148,7 @@ int main(int argc, char *argv[]) {
                                                 transformationEpsilon, euclideanFitnessEpsilon, cuRt, stream);
         timer.end("GPU ICP");
         if (converged2)
-            spdlog::info("GPU ICP converged, percent: {}", percent2 * 100);
+            spdlog::info("GPU ICP converged, inlier percentage: {}", percent2 * 100);
         else
             spdlog::error("GPU ICP not converged.");
         spdlog::info("GPU ICP result:");
