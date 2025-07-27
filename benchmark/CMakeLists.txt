@@ -1,5 +1,5 @@
 # CMAKE MODULES
-list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 include(CPM)
 
 # EXTERNAL LIBRARIES
@@ -14,10 +14,10 @@ set(target_list
     icp_test
 )
 foreach(target ${target_list})
-    if(CUDA_FOUND)
-        cuda_add_executable(${target} ${target}.cu)
+    if(CMAKE_CUDA_COMPILER)
+        add_executable(${target} ${target}.cu)
         target_compile_definitions(${target} PRIVATE CUDA_FOUND)
-    elseif(HIP_FOUND)
+    elseif(CMAKE_HIP_COMPILER)
         add_executable(${target} ${target}.hip)
         target_compile_definitions(${target} PRIVATE HIP_FOUND)
     else()
