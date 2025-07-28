@@ -26,10 +26,10 @@ IDRange[5] = [9, 12)
 IDRange[6] = [12, 15)
 */
 
-inline __device__ uint32_t lowerBound(uint32_t const *data, uint32_t size, uint32_t value) {
+__device__ inline uint32_t lowerBound(uint32_t const *__restrict__ data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
-        uint32_t mid = (left + right) / 2;
+        uint32_t mid = (left + right) >> 1;
         if (data[mid] < value)
             left = mid + 1;
         else
@@ -38,10 +38,10 @@ inline __device__ uint32_t lowerBound(uint32_t const *data, uint32_t size, uint3
     return left;
 }
 
-inline __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint32_t value) {
+__device__ inline uint32_t upperBound(uint32_t const *__restrict__ data, uint32_t size, uint32_t value) {
     uint32_t left = 0, right = size;
     while (left < right) {
-        uint32_t mid = (left + right) / 2;
+        uint32_t mid = (left + right) >> 1;
         if (data[mid] <= value)
             left = mid + 1;
         else
@@ -50,7 +50,8 @@ inline __device__ uint32_t upperBound(uint32_t const *data, uint32_t size, uint3
     return left;
 }
 
-__global__ void searchIDRange(uint32_t const *treeIDs, uint32_t size, uint2 *IDRange, uint32_t level) {
+__global__ void searchIDRange(uint32_t const *__restrict__ treeIDs, uint32_t size,
+                              uint2 *__restrict__ IDRange, uint32_t level) {
     // start id (inclusive): 2^level - 1
     // end id (exclusive): 2^(level + 1) - 1
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -64,7 +65,8 @@ __global__ void searchIDRange(uint32_t const *treeIDs, uint32_t size, uint2 *IDR
     IDRange[id - (1 << level) + 1].y = end;
 }
 
-__global__ void updateTreeID(uint32_t *treeIDs, uint32_t size, uint2 const *IDRange, uint32_t level) {
+__global__ void updateTreeID(uint32_t *__restrict__ treeIDs, uint32_t size, uint2 const *__restrict__ IDRange,
+                             uint32_t level) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= size || idx < (1 << level) - 1)
         return;
@@ -82,14 +84,14 @@ __global__ void updateTreeID(uint32_t *treeIDs, uint32_t size, uint2 const *IDRa
 }
 
 // Not using sqrt to make it faster
-inline __device__ float estimateDistance(float3 const &a, float3 const &b) {
+__device__ inline float estimateDistance(float3 const &a, float3 const &b) {
     float dx = a.x - b.x;
     float dy = a.y - b.y;
     float dz = a.z - b.z;
     return dx * dx + dy * dy + dz * dz;
 }
 
-inline __device__ float getDifference(float3 const &point, float3 const &target, uint32_t axis) {
+__device__ inline float getDifference(float3 const &point, float3 const &target, uint32_t axis) {
     if (axis == 0)
         return point.x - target.x;
     else if (axis == 1)
@@ -98,8 +100,8 @@ inline __device__ float getDifference(float3 const &point, float3 const &target,
         return point.z - target.z;
 }
 
-__device__ int32_t findNearestPoint(float3 const &point, float3 const *d_target, uint32_t n_target,
-                                    float inlierThreshold) {
+__device__ int32_t findNearestPoint(float3 const &point, float3 const *__restrict__ d_target,
+                                    uint32_t n_target, float inlierThreshold) {
     // TODO: Assume maximum level is 32, need to check if it is enough
     uint32_t stack[32]; // store tree id of the secondary node (left or right)
     uint32_t idx = 0, currID = 0;
@@ -197,9 +199,9 @@ __device__ int32_t findNearestPoint(float3 const &point, float3 const *d_target,
     return bestID;
 }
 
-__global__ void findAllNearestDistanceKernel(float3 const *d_source, uint32_t n_source,
-                                             float3 const *d_target, uint32_t n_target, float *d_distance,
-                                             float inlierThreshold) {
+__global__ void findAllNearestDistanceKernel(float3 const *__restrict__ d_source, uint32_t n_source,
+                                             float3 const *__restrict__ d_target, uint32_t n_target,
+                                             float *__restrict__ d_distance, float inlierThreshold) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n_source)
         return;
@@ -212,7 +214,7 @@ __global__ void findAllNearestDistanceKernel(float3 const *d_source, uint32_t n_
         d_distance[idx] = sqrt(estimateDistance(point, d_target[id]));
 }
 
-inline __host__ __device__ float getAxisValue(float3 const &point, uint32_t axis) {
+__host__ __device__ inline float getAxisValue(float3 const &point, uint32_t axis) {
     if (axis == 0)
         return point.x;
     else if (axis == 1)
@@ -223,7 +225,7 @@ inline __host__ __device__ float getAxisValue(float3 const &point, uint32_t axis
 
 struct Comparator {
     __host__ __device__ Comparator(uint32_t axis) : axis(axis) {}
-    inline __host__ __device__ bool operator()(thrust::tuple<uint32_t, float3> const &a,
+    __host__ __device__ inline bool operator()(thrust::tuple<uint32_t, float3> const &a,
                                                thrust::tuple<uint32_t, float3> const &b) {
         // Group by id first, then sort by value
         auto idA = thrust::get<0>(a);
@@ -292,9 +294,10 @@ std::vector<float> KDTree::findAllNearestDistance(std::vector<float3> const &sou
     return estimateDistance;
 }
 
-__global__ void findAllNearestIndexKernel(float3 const *d_source, uint32_t n_source, float3 const *d_target,
-                                          uint32_t n_target, float inlierThreshold, bool *inlier,
-                                          float3 *dsrc, float3 *dtar) {
+__global__ void findAllNearestIndexKernel(float3 const *__restrict__ d_source, uint32_t n_source,
+                                          float3 const *__restrict__ d_target, uint32_t n_target,
+                                          float inlierThreshold, bool *__restrict__ inlier,
+                                          float3 *__restrict__ dsrc, float3 *__restrict__ dtar) {
     uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= n_source)
         return;
