@@ -10,20 +10,20 @@ void ICP::setTarget(std::vector<float3> const &target, cudaStream_t stream) {
 }
 
 // Add operator for float3
-inline __host__ __device__ float3 operator+(float3 const &a, float3 const &b) {
+__host__ __device__ inline float3 operator+(float3 const &a, float3 const &b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
-inline __host__ __device__ float3 operator-(float3 const &a, float3 const &b) {
+__host__ __device__ inline float3 operator-(float3 const &a, float3 const &b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 #ifdef CUDA_FOUND
-inline __host__ __device__ float3 operator*(float3 const &a, float3 const &b) {
+__host__ __device__ inline float3 operator*(float3 const &a, float3 const &b) {
     return {a.x * b.x, a.y * b.y, a.z * b.z};
 }
 #endif
 
 struct SumFunctor {
-    inline __host__ __device__ thrust::tuple<float3, float3>
+    __host__ __device__ inline thrust::tuple<float3, float3>
     operator()(thrust::tuple<float3, float3> const &x, thrust::tuple<float3, float3> const &y) const {
         return thrust::make_tuple(thrust::get<0>(x) + thrust::get<0>(y),
                                   thrust::get<1>(x) + thrust::get<1>(y));
@@ -31,7 +31,7 @@ struct SumFunctor {
 };
 
 struct PartitionLess {
-    inline __host__ __device__ bool operator()(bool const x) { return x; }
+    __host__ __device__ inline bool operator()(bool const x) { return x; }
 };
 
 /*
@@ -43,7 +43,7 @@ for example:
 => init op1 (x1 op2 y1) op1 (x2 op2 y2) op1 ... op1 (xn op2 yn)
 */
 struct BinaryOp1 {
-    inline __host__ __device__ thrust::tuple<float3, float3, float3>
+    __host__ __device__ inline thrust::tuple<float3, float3, float3>
     operator()(thrust::tuple<float3, float3, float3> const &a,
                thrust::tuple<float3, float3, float3> const &b) {
         return thrust::make_tuple(thrust::get<0>(a) + thrust::get<0>(b),
@@ -54,8 +54,8 @@ struct BinaryOp1 {
 
 struct BinaryOp2 {
     __host__ __device__ BinaryOp2(float3 const &csrc, float3 const &ctar) : csrc(csrc), ctar(ctar) {}
-    inline __host__ __device__ thrust::tuple<float3, float3, float3> operator()(float3 const &src,
-                                                                                         float3 const &tar) {
+    __host__ __device__ inline thrust::tuple<float3, float3, float3> operator()(float3 const &src,
+                                                                                float3 const &tar) {
         float3 a = src - csrc, b = tar - ctar;
         return thrust::make_tuple(make_float3(a.x * b.x, a.x * b.y, a.x * b.z),
                                   make_float3(a.y * b.x, a.y * b.y, a.y * b.z),
@@ -70,7 +70,7 @@ struct BinaryOp2 {
 // in-place operation
 struct TransformFunctor {
     __host__ __device__ TransformFunctor(float *R, float *t) : R(R), t(t) {}
-    inline __host__ __device__ void operator()(float3 &p) const {
+    __host__ __device__ inline void operator()(float3 &p) const {
         float3 transformed = {R[0] * p.x + R[1] * p.y + R[2] * p.z + t[0],
                               R[3] * p.x + R[4] * p.y + R[5] * p.z + t[1],
                               R[6] * p.x + R[7] * p.y + R[8] * p.z + t[2]};
@@ -85,7 +85,7 @@ struct TransformFunctor {
 // Euclidean distance error
 struct EuclideanDistanceFunctor {
     __host__ __device__ EuclideanDistanceFunctor(float *R, float *t) : R(R), t(t) {}
-    inline __host__ __device__ float operator()(thrust::tuple<float3, float3> const &p) const {
+    __host__ __device__ inline float operator()(thrust::tuple<float3, float3> const &p) const {
         float3 src = thrust::get<0>(p);
         float3 tar = thrust::get<1>(p);
         float3 transformed = {R[0] * src.x + R[1] * src.y + R[2] * src.z + t[0],
